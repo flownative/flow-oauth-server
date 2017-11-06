@@ -1,0 +1,9 @@
+-
+  name: 'OAuth 2.0 Server - access token'
+  uriPattern: 'token'
+  defaults:
+    '@package':    'Flownative.OAuth2.Server'
+    '@controller': 'OAuthServer'
+    '@action':     'accessToken'
+    '@format':     'json'
+  appendExceedingArguments: true
