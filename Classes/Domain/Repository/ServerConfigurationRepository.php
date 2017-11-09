@@ -15,8 +15,8 @@ class ServerConfigurationRepository extends Repository
      * @param string $key
      * @return ServerConfiguration|null
      */
-    public function findOneByKey(string $key): ?ServerConfiguration
+    public function findOneByConfigurationKey(string $key): ?ServerConfiguration
     {
-        return $this->__call('findOneByKey', [$key]);
+        return $this->__call('findOneByConfigurationKey', [$key]);
     }
 }

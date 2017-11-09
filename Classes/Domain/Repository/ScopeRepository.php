@@ -2,27 +2,53 @@
 
 namespace Flownative\OAuth2\Server\Domain\Repository;
 
+use Neos\Flow\Annotations as Flow;
+use Flownative\OAuth2\Server\Domain\Model\Scope;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
 use League\OAuth2\Server\Repositories\ScopeRepositoryInterface;
-use Neos\Flow\Annotations\Scope;
 use Neos\Flow\Persistence\Repository;
 
 /**
- * @Scope("singleton")
+ * @Flow\Scope("singleton")
  */
-class ScopeRepository extends Repository implements ScopeRepositoryInterface
+final class ScopeRepository extends Repository implements ScopeRepositoryInterface
 {
-    public function getScopeEntityByIdentifier($identifier)
+    /**
+     * @var array
+     */
+    private $scopes = [
+        'customerAccounts-rw' => null
+    ];
+
+    /**
+     * @param string $identifier
+     * @return Scope|null
+     */
+    public function getScopeEntityByIdentifier($identifier): ?Scope
     {
-        // TODO: Implement getScopeEntityByIdentifier() method.
+        if (!key_exists($identifier, $this->scopes)) {
+            return null;
+        }
+
+        if ($this->scopes[$identifier] === null) {
+            $this->scopes[$identifier] = new Scope($identifier);
+        }
+        return $this->scopes[$identifier];
     }
 
+    /**
+     * @param array $scopes
+     * @param string $grantType
+     * @param ClientEntityInterface $clientEntity
+     * @param null $userIdentifier
+     * @return array|\League\OAuth2\Server\Entities\ScopeEntityInterface[]
+     */
     public function finalizeScopes(
         array $scopes,
         $grantType,
         ClientEntityInterface $clientEntity,
         $userIdentifier = null
     ) {
-        // TODO: Implement finalizeScopes() method.
+        return $scopes;
     }
 }

@@ -2,54 +2,77 @@
 
 namespace Flownative\OAuth2\Server\Domain\Model;
 
+use Doctrine\ORM\Mapping as ORM;
 use Neos\Flow\Annotations\Entity;
 use Neos\Flow\Annotations\Identity;
 
 /**
  * @Entity()
  */
-final class ServerConfiguration
+final class ServerConfiguration implements \JsonSerializable
 {
     /**
      * @Identity()
+     * @ORM\Id()
      * @var string
      */
-    protected $key;
+    protected $configurationKey;
 
     /**
+     * @ORM\Column(type="text")
      * @var string
      */
-    protected $value;
+    protected $configurationValue;
+
+    /**
+     * ServerConfiguration constructor.
+     *
+     * @param string $configurationKey
+     * @param string $configurationValue
+     */
+    public function __construct(string $configurationKey, string $configurationValue)
+    {
+        $this->configurationKey = $configurationKey;
+        $this->configurationValue = $configurationValue;
+    }
 
     /**
      * @return string
      */
-    public function getKey(): string
+    public function getConfigurationKey(): string
     {
-        return $this->key;
-    }
-
-    /**
-     * @param string $key
-     */
-    public function setKey(string $key)
-    {
-        $this->key = $key;
+        return $this->configurationKey;
     }
 
     /**
      * @return string
      */
-    public function getValue(): string
+    public function getConfigurationValue(): string
     {
-        return $this->value;
+        return $this->configurationValue;
     }
 
     /**
-     * @param string $value
+     * @param string $configurationValue
      */
-    public function setValue(string $value)
+    public function setConfigurationValue(string $configurationValue)
     {
-        $this->value = $value;
+        $this->configurationValue = $configurationValue;
+    }
+
+    /**
+     * @return string
+     */
+    public function __toString(): string
+    {
+        return $this->configurationValue;
+    }
+
+    /**
+     * @return string
+     */
+    public function jsonSerialize()
+    {
+        return $this->__toString();
     }
 }

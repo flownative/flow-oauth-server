@@ -1,0 +1,21 @@
+#
+# Security policy for Flownative.OAuth2.Server
+#
+
+privilegeTargets:
+
+  'Neos\Flow\Security\Authorization\Privilege\Method\MethodPrivilege':
+
+    'Flownative.OAuth2.Server:Public':
+      matcher: 'method(Flownative\OAuth2\Server\Controller\OAuthServerController->(accessToken|initialize)Action())'
+
+#
+# ROLES
+#
+roles:
+
+  'Neos.Flow:Everybody':
+    privileges:
+      -
+        privilegeTarget: 'Flownative.OAuth2.Server:Public'
+        permission: GRANT

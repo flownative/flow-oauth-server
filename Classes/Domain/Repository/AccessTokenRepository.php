@@ -2,6 +2,7 @@
 
 namespace Flownative\OAuth2\Server\Domain\Repository;
 
+use Flownative\OAuth2\Server\Domain\Model\AccessToken;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
 use League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface;
@@ -15,21 +16,19 @@ class AccessTokenRepository extends Repository implements AccessTokenRepositoryI
 {
     public function getNewToken(ClientEntityInterface $clientEntity, array $scopes, $userIdentifier = null)
     {
-        // TODO: Implement getNewToken() method.
+        return new AccessToken();
     }
 
     public function persistNewAccessToken(AccessTokenEntityInterface $accessTokenEntity)
     {
-        // TODO: Implement persistNewAccessToken() method.
     }
 
     public function revokeAccessToken($tokenId)
     {
-        // TODO: Implement revokeAccessToken() method.
     }
 
     public function isAccessTokenRevoked($tokenId)
     {
-        // TODO: Implement isAccessTokenRevoked() method.
+        return false;
     }
 }
