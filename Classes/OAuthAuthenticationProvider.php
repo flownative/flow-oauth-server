@@ -13,6 +13,7 @@ use Neos\Flow\Log\SystemLoggerInterface;
 use Neos\Flow\Security\Account;
 use Neos\Flow\Security\Authentication\Provider\AbstractProvider;
 use Neos\Flow\Security\Authentication\TokenInterface;
+use Neos\Flow\Security\Context;
 use Neos\Flow\Security\Exception\UnsupportedAuthenticationTokenException;
 use Neos\Flow\Security\Policy\PolicyService;
 
@@ -44,6 +45,12 @@ class OAuthAuthenticationProvider extends AbstractProvider
      * @var ServerConfigurationRepository
      */
     protected $serverConfigurationRepository;
+
+    /**
+     * @Flow\Inject
+     * @var Context
+     */
+    protected $securityContext;
 
     /**
      * @Flow\Inject
@@ -112,6 +119,10 @@ class OAuthAuthenticationProvider extends AbstractProvider
                 $roles[] = $this->policyService->getRole($roleIdentifier);
             }
             $account->setRoles($roles);
+
+            // Disable CSRF protection for this authentication method
+            $csrfProtectionToken = $this->securityContext->getCsrfProtectionToken();
+            $requestHandler->getHttpRequest()->setHeader('X-Flow-Csrftoken', $csrfProtectionToken);
 
             $authenticationToken->setAccount($account);
             $authenticationToken->setAuthenticationStatus(TokenInterface::AUTHENTICATION_SUCCESSFUL);
