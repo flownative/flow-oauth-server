@@ -15,7 +15,7 @@
     "email": "support@flownative.com"
   },
   "require": {
-    "neos/flow": "~4.0",
+    "neos/flow": "~4.0 || ~5.0",
     "league/oauth2-server": "~6.0"
   },
   "autoload": {
