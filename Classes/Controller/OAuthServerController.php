@@ -52,6 +52,7 @@ final class OAuthServerController extends ActionController
 
     /**
      * @return void
+     * @throws \Exception
      */
     public function initializeObject(): void
     {
@@ -116,10 +117,12 @@ final class OAuthServerController extends ActionController
                 $this->response->setHeader($headerName, $headerValue);
             }
         }
-        $this->response->setContent($response->getBody());
 
-        $this->systemLogger->log(sprintf('accessToken: responding with HTTP status code %s', $response->getStatusCode()), LOG_DEBUG, $response->getBody());
-        return '';
+        $response->getBody()->rewind();
+        $this->systemLogger->log(sprintf('accessToken: responding with HTTP status code %s', $response->getStatusCode()), LOG_DEBUG, $response->getBody()->getContents());
+
+        $response->getBody()->rewind();
+        return $response->getBody()->getContents();
     }
 
     /**
