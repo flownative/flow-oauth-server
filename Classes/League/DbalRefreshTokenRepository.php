@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Flownative\OAuth2\Server\League;
 
-use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
 use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\TokenSecret;
 use League\OAuth2\Server\Entities\RefreshTokenEntityInterface;
@@ -124,8 +124,10 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
     {
         if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
             return $this->connection->fetchOne(
-                'SELECT 1 FROM flownative_oauth2_server_refresh_token WHERE token_digest = :digest AND spent_at > :spentAfter' . $this->lockingReadOnMysql(),
-                ['digest' => TokenSecret::digest($secret), 'spentAfter' => DatabasePlatform::MYSQL->timestamp(new DateTimeImmutable(sprintf('-%d seconds', $seconds)))]
+                'SELECT 1 FROM flownative_oauth2_server_refresh_token
+                 WHERE token_digest = :digest AND spent_at > UTC_TIMESTAMP(6) - INTERVAL :seconds SECOND' . $this->lockingReadOnMysql(),
+                ['digest' => TokenSecret::digest($secret), 'seconds' => $seconds],
+                ['seconds' => ParameterType::INTEGER]
             ) !== false;
         }
         return $this->connection->fetchOne(

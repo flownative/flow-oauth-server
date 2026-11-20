@@ -7,6 +7,7 @@ namespace Flownative\OAuth2\Server\Command;
 use DateInterval;
 use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
 use Flownative\OAuth2\Server\DatabasePlatform;
 use Neos\Flow\Annotations as Flow;
 use Neos\Flow\Cli\CommandController;
@@ -55,8 +56,9 @@ class OAuthServerCommandController extends CommandController
     {
         if ($platform === DatabasePlatform::MYSQL) {
             return $this->connection->executeStatement(
-                "DELETE FROM flownative_oauth2_server_client WHERE origin = 'metadata_document' AND expires_at < :expiredBefore",
-                ['expiredBefore' => $platform->timestamp(new DateTimeImmutable(sprintf('-%d seconds', $this->staleIfErrorLifetime)))]
+                "DELETE FROM flownative_oauth2_server_client WHERE origin = 'metadata_document' AND expires_at < UTC_TIMESTAMP(6) - INTERVAL :staleIfErrorLifetime SECOND",
+                ['staleIfErrorLifetime' => $this->staleIfErrorLifetime],
+                ['staleIfErrorLifetime' => ParameterType::INTEGER]
             );
         }
         return $this->connection->executeStatement(
@@ -68,7 +70,7 @@ class OAuthServerCommandController extends CommandController
     private function removeUnusedClients(DatabasePlatform $platform): int|string
     {
         if ($platform === DatabasePlatform::MYSQL) {
-            // MariaDB takes no alias in a single-table DELETE.
+            // MariaDB takes no alias in a single-table DELETE. The registration wrote created_at from the clock of PHP, as the threshold is.
             return $this->connection->executeStatement(
                 "DELETE FROM flownative_oauth2_server_client WHERE origin = 'registration' AND created_at < :createdBefore
                  AND NOT EXISTS (SELECT 1 FROM flownative_oauth2_server_grant g WHERE g.client_id = flownative_oauth2_server_client.client_id)",

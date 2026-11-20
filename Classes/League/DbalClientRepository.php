@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Flownative\OAuth2\Server\League;
 
-use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
 use Flownative\OAuth2\Server\Client\ClientMetadataDocuments;
 use Flownative\OAuth2\Server\Client\FetchedClientMetadataDocument;
 use Flownative\OAuth2\Server\ClientMetadataFetchThrottleInterface;
@@ -105,8 +105,9 @@ class DbalClientRepository implements ClientRepositoryInterface
         if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
             return $this->connection->fetchAssociative(
                 "SELECT client_id, client_name, redirect_uris FROM flownative_oauth2_server_client
-                 WHERE client_id = :clientId AND (origin = 'registration' OR expires_at > :expiredAfter)",
-                ['clientId' => $clientIdentifier, 'expiredAfter' => DatabasePlatform::MYSQL->timestamp(new DateTimeImmutable(sprintf('-%d seconds', $this->staleIfErrorLifetime)))]
+                 WHERE client_id = :clientId AND (origin = 'registration' OR expires_at > UTC_TIMESTAMP(6) - INTERVAL :staleIfErrorLifetime SECOND)",
+                ['clientId' => $clientIdentifier, 'staleIfErrorLifetime' => $this->staleIfErrorLifetime],
+                ['staleIfErrorLifetime' => ParameterType::INTEGER]
             );
         }
         return $this->connection->fetchAssociative(
@@ -125,23 +126,23 @@ class DbalClientRepository implements ClientRepositoryInterface
         $redirectUris = json_encode($document->client->redirectUris, JSON_THROW_ON_ERROR);
         if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
             // Each name appears once: a native prepared statement does not take a name twice.
-            $expiresAt = DatabasePlatform::MYSQL->timestamp(new DateTimeImmutable(sprintf('+%d seconds', $document->cacheLifetime)));
             $this->connection->executeStatement(
                 "INSERT INTO flownative_oauth2_server_client (client_id, client_name, redirect_uris, origin, created_at, expires_at)
-                 VALUES (:clientId, :clientName, :redirectUris, 'metadata_document', UTC_TIMESTAMP(6), :expiresAt)
+                 VALUES (:clientId, :clientName, :redirectUris, 'metadata_document', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6) + INTERVAL :lifetime SECOND)
                  ON DUPLICATE KEY UPDATE
                     client_name = IF(origin = 'metadata_document', :updatedClientName, client_name),
                     redirect_uris = IF(origin = 'metadata_document', :updatedRedirectUris, redirect_uris),
-                    expires_at = IF(origin = 'metadata_document', :updatedExpiresAt, expires_at)",
+                    expires_at = IF(origin = 'metadata_document', UTC_TIMESTAMP(6) + INTERVAL :updatedLifetime SECOND, expires_at)",
                 [
                     'clientId' => $clientIdentifier,
                     'clientName' => $document->client->name,
                     'redirectUris' => $redirectUris,
-                    'expiresAt' => $expiresAt,
+                    'lifetime' => $document->cacheLifetime,
                     'updatedClientName' => $document->client->name,
                     'updatedRedirectUris' => $redirectUris,
-                    'updatedExpiresAt' => $expiresAt,
-                ]
+                    'updatedLifetime' => $document->cacheLifetime,
+                ],
+                ['lifetime' => ParameterType::INTEGER, 'updatedLifetime' => ParameterType::INTEGER]
             );
             return;
         }
