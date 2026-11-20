@@ -232,7 +232,7 @@ abstract class AuthorizationServerTestCase extends FunctionalTestCase
     /**
      * An application may build the schema for its tests once and keep it.
      * Flow's own persistence manager drops every table after each test, so
-     * then the package's migration creates them again.
+     * then the package's migrations create them again.
      */
     private function createTablesUnlessPresent(): void
     {
@@ -240,10 +240,12 @@ abstract class AuthorizationServerTestCase extends FunctionalTestCase
         if ($connection->createSchemaManager()->tablesExist(['flownative_oauth2_server_grant'])) {
             return;
         }
-        $version = match (DatabasePlatform::of($connection)) {
-            DatabasePlatform::POSTGRESQL => 'Version20261119101252',
-            DatabasePlatform::MYSQL => 'Version20261120190207',
+        $versions = match (DatabasePlatform::of($connection)) {
+            DatabasePlatform::POSTGRESQL => ['Version20261119101252'],
+            DatabasePlatform::MYSQL => ['Version20261120190207', 'Version20261120201811'],
         };
-        $this->objectManager->get(DoctrineService::class)->executeMigration('Neos\\Flow\\Persistence\\Doctrine\\Migrations\\' . $version);
+        foreach ($versions as $version) {
+            $this->objectManager->get(DoctrineService::class)->executeMigration('Neos\\Flow\\Persistence\\Doctrine\\Migrations\\' . $version);
+        }
     }
 }
