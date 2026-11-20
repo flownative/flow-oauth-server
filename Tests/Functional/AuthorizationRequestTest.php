@@ -11,6 +11,7 @@ use Flownative\OAuth2\Server\AuthorizationRequests;
 use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\Issuer;
 use Flownative\OAuth2\Server\League\AuthorizationCodes;
+use Flownative\OAuth2\Server\League\DbalClientRepository;
 use Flownative\OAuth2\Server\League\DbalRefreshTokenRepository;
 use Flownative\OAuth2\Server\Tests\Functional\Fixtures\SpendingProcess;
 use Flownative\OAuth2\Server\UnknownAuthorizationRequestException;
@@ -197,6 +198,16 @@ class AuthorizationRequestTest extends AuthorizationServerTestCase
         self::assertSame(str_repeat('n', 150), self::json($whole)['client_name']);
         self::assertSame(413, $tooLarge->getStatusCode());
         self::assertSame(413, $tooLargeForm->getStatusCode());
+    }
+
+    #[Test]
+    public function anIdentifierOnlyMatchesItself(): void
+    {
+        $clientIdentifier = $this->registerClient();
+        $clients = $this->objectManager->get(DbalClientRepository::class);
+
+        self::assertNotNull($clients->getClientEntity($clientIdentifier));
+        self::assertNull($clients->getClientEntity($clientIdentifier . ' '), 'trailing spaces count');
     }
 
     #[Test]

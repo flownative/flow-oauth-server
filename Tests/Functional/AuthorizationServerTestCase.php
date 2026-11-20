@@ -242,7 +242,7 @@ abstract class AuthorizationServerTestCase extends FunctionalTestCase
         }
         $versions = match (DatabasePlatform::of($connection)) {
             DatabasePlatform::POSTGRESQL => ['Version20261119101252'],
-            DatabasePlatform::MYSQL => ['Version20261120190207', 'Version20261120201811'],
+            DatabasePlatform::MYSQL => ['Version20261120190207', 'Version20261120201811', 'Version20261120203500'],
         };
         foreach ($versions as $version) {
             $this->objectManager->get(DoctrineService::class)->executeMigration('Neos\\Flow\\Persistence\\Doctrine\\Migrations\\' . $version);
