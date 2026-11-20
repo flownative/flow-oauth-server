@@ -1,1 +1,104 @@
--
+Flownative:
+  OAuth2:
+    Server:
+
+      # Whether the middleware answers the endpoints at all. An application
+      # turns it on once it has its consent page and issuer resolver.
+      enabled: false
+
+      # Paths below the issuer. The two metadata documents stand at their
+      # well-known paths.
+      endpoints:
+        authorization: '/oauth/authorize'
+        token: '/oauth/token'
+        registration: '/oauth/register'
+        revocation: '/oauth/revoke'
+
+      # The protected resource the tokens are bound to, below the issuer.
+      resourcePath: '/mcp'
+
+      # Where ConfiguredConsentPage sends a validated request, as ?request=…
+      consentPagePath: '/oauth/consent'
+
+      # ISO 8601 durations. A refresh token is replaced on every use, so its
+      # lifetime is how long a client may stay away.
+      lifetimes:
+        authorizationRequest: 'PT10M'
+        authorizationCode: 'PT1M'
+        accessToken: 'PT1H'
+        refreshToken: 'P90D'
+
+      # Seconds after a refresh in which its client presenting the spent refresh
+      # token again, as after a lost answer, gets invalid_grant without the
+      # grant being revoked. 0 revokes on every second use.
+      refreshTokenRetryGracePeriod: 3
+
+      # Secret scanners recognize a token by its prefix.
+      tokenPrefixes:
+        accessToken: 'oauth2_at_'
+        refreshToken: 'oauth2_rt_'
+
+      scopes:
+        supported: ['mcp', 'offline_access']
+        default: 'mcp'
+        # What the protected resource metadata and the challenge name.
+        ofTheResource: ['mcp']
+
+      clientMetadataDocuments:
+        enabled: true
+        maximumBytes: 5120
+        # Seconds for the whole fetch, name resolution included.
+        timeout: 5.0
+        # Seconds; the document's own Cache-Control may shorten it down to the
+        # minimum, which covers at least the request that fetched it.
+        minimumCacheLifetime: 60
+        maximumCacheLifetime: 86400
+        # Seconds a refused document is not fetched again.
+        refusalLifetime: 300
+        # Seconds past its lifetime a cached document still serves its client
+        # while fetching it again fails.
+        staleIfErrorLifetime: 86400
+        # A host that resolves into one of these is never asked: private,
+        # shared, loopback, link-local, documentation, benchmarking,
+        # translation, multicast and reserved ranges.
+        deniedNetworks:
+          - '0.0.0.0/8'
+          - '10.0.0.0/8'
+          - '100.64.0.0/10'
+          - '127.0.0.0/8'
+          - '169.254.0.0/16'
+          - '172.16.0.0/12'
+          - '192.0.0.0/24'
+          - '192.0.2.0/24'
+          - '192.88.99.0/24'
+          - '192.168.0.0/16'
+          - '198.18.0.0/15'
+          - '198.51.100.0/24'
+          - '203.0.113.0/24'
+          - '224.0.0.0/4'
+          - '240.0.0.0/4'
+          - '::/96'
+          - '::ffff:0:0/96'
+          - '64:ff9b::/96'
+          - '64:ff9b:1::/48'
+          - '100::/64'
+          - '2001::/23'
+          - '2001:db8::/32'
+          - '2002::/16'
+          - 'fc00::/7'
+          - 'fe80::/10'
+          - 'fec0::/10'
+          - 'ff00::/8'
+
+      registration:
+        enabled: true
+        # A registered client that got no grant in this time is removed.
+        unusedClientLifetime: 'P1D'
+
+Neos:
+  Flow:
+    http:
+      middlewares:
+        'Flownative.OAuth2.Server:Endpoints':
+          position: 'before routing'
+          middleware: 'Flownative\OAuth2\Server\AuthorizationServerMiddleware'

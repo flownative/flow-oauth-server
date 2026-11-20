@@ -1,187 +1,55 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Flownative\OAuth2\Server\Command;
 
-use Flownative\OAuth2\Server\Domain\Model\Client;
-use Flownative\OAuth2\Server\Domain\Model\HashedSecret;
-use Flownative\OAuth2\Server\Domain\Model\ServerConfiguration;
-use Flownative\OAuth2\Server\Domain\Repository\AccessTokenRepository;
-use Flownative\OAuth2\Server\Domain\Repository\ClientRepository;
-use Flownative\OAuth2\Server\Domain\Repository\ScopeRepository;
-use Flownative\OAuth2\Server\Domain\Repository\ServerConfigurationRepository;
-use Neos\Flow\Annotations\Inject;
+use Doctrine\DBAL\Connection;
+use Neos\Flow\Annotations as Flow;
 use Neos\Flow\Cli\CommandController;
 
-final class OAuthServerCommandController extends CommandController
+#[Flow\Scope('singleton')]
+class OAuthServerCommandController extends CommandController
 {
-    /**
-     * @Inject()
-     * @var ClientRepository
-     */
-    protected $clientRepository;
+    #[Flow\InjectConfiguration(path: 'registration.unusedClientLifetime')]
+    protected string $unusedClientLifetime;
 
-    /**
-     * @Inject()
-     * @var AccessTokenRepository
-     */
-    protected $accessTokenRepository;
+    #[Flow\InjectConfiguration(path: 'clientMetadataDocuments.staleIfErrorLifetime')]
+    protected int $staleIfErrorLifetime;
 
-    /**
-     * @Inject()
-     * @var ScopeRepository
-     */
-    protected $scopeRepository;
-
-    /**
-     * @Inject()
-     * @var ServerConfigurationRepository
-     */
-    protected $serverConfigurationRepository;
-
-    /**
-     * Generate server keys
-     *
-     * This command generates the OAuth server private / public key pair and an encryption key and stores them in the
-     * database.
-     */
-    public function generateServerKeysCommand()
-    {
-        $encryptionKey = base64_encode(random_bytes(32));
-
-        $serverConfiguration = $this->serverConfigurationRepository->findOneByConfigurationKey('encryptionKey');
-        if ($serverConfiguration === null) {
-            $this->serverConfigurationRepository->add(new ServerConfiguration('encryptionKey', $encryptionKey));
-        } else {
-            $serverConfiguration->setConfigurationValue($encryptionKey);
-            $this->serverConfigurationRepository->update($serverConfiguration);
-        }
-
-        list($privateKey, $publicKey, $consoleOutput) = $this->generateKeyPair();
-
-        $serverConfiguration = $this->serverConfigurationRepository->findOneByConfigurationKey('privateKey');
-        if ($serverConfiguration === null) {
-            $this->serverConfigurationRepository->add(new ServerConfiguration('privateKey', $privateKey));
-        } else {
-            $serverConfiguration->setConfigurationValue($privateKey);
-            $this->serverConfigurationRepository->update($serverConfiguration);
-        }
-
-        $serverConfiguration = $this->serverConfigurationRepository->findOneByConfigurationKey('publicKey');
-        if ($serverConfiguration === null) {
-            $this->serverConfigurationRepository->add(new ServerConfiguration('publicKey', $publicKey));
-        } else {
-            $serverConfiguration->setConfigurationValue($publicKey);
-            $this->serverConfigurationRepository->update($serverConfiguration);
-        }
-
-        $this->outputLine('<success>Generated a new key pair and stored it in the database.</success>');
+    public function __construct(
+        private readonly Connection $connection,
+    ) {
+        parent::__construct();
     }
 
     /**
-     * Create client credentials
+     * Remove what can no longer be used
      *
-     * Creates client credentials (ie., basically an "account" which can authenticate via Client Credentials Grant)
-     *
-     * @param string $identifier The client identifier
-     * @param string $name Name of the machine / system / person owning the new client credentials
-     * @param string|null $secret
+     * Removes expired authorization requests, codes and tokens, cached client
+     * metadata documents that may no longer serve even while a fetch fails,
+     * and registered clients that never got a grant. Grants stay, revoked
+     * ones included.
      */
-    public function createClientCredentialsCommand(string $identifier, string $name, string $secret = null)
+    public function collectGarbageCommand(): void
     {
-        if ($this->clientRepository->findOneByIdentifier($identifier) !== null) {
-            $this->outputLine('<error>A client with this identifier already exists.</error>');
-            $this->quit(1);
+        $removed = [
+            'authorization requests' => $this->connection->executeStatement('DELETE FROM flownative_oauth2_server_authorization_request WHERE expires_at < now()'),
+            'authorization codes' => $this->connection->executeStatement('DELETE FROM flownative_oauth2_server_authorization_code WHERE expires_at < now()'),
+            'access tokens' => $this->connection->executeStatement('DELETE FROM flownative_oauth2_server_access_token WHERE expires_at < now()'),
+            'refresh tokens' => $this->connection->executeStatement('DELETE FROM flownative_oauth2_server_refresh_token WHERE expires_at < now() OR revoked_at IS NOT NULL'),
+            'client metadata documents' => $this->connection->executeStatement(
+                "DELETE FROM flownative_oauth2_server_client WHERE origin = 'metadata_document' AND expires_at < now() - make_interval(secs => :staleIfErrorLifetime)",
+                ['staleIfErrorLifetime' => $this->staleIfErrorLifetime]
+            ),
+            'unused clients' => $this->connection->executeStatement(
+                "DELETE FROM flownative_oauth2_server_client c WHERE c.origin = 'registration' AND c.created_at < now() - CAST(:lifetime AS interval)
+                 AND NOT EXISTS (SELECT 1 FROM flownative_oauth2_server_grant g WHERE g.client_id = c.client_id)",
+                ['lifetime' => $this->unusedClientLifetime]
+            ),
+        ];
+        foreach ($removed as $what => $count) {
+            $this->outputLine('%d %s removed', [$count, $what]);
         }
-
-        if ($secret === null) {
-            $secret = base64_encode(random_bytes(30));
-        }
-
-        $hashedSecret = HashedSecret::fromClearTextSecret($secret);
-
-        $client = new Client($identifier, $name, 'client_credentials', $hashedSecret);
-        $this->clientRepository->add($client);
-
-        $this->outputLine('Client credentials created. Secret: <b>%s</b>', [$secret]);
-    }
-
-    /**
-     * List clients
-     *
-     * Lists existing clients
-     */
-    public function listClientsCommand()
-    {
-        $rows = [];
-        foreach ($this->clientRepository->findAll() as $client) {
-            /** @var Client $client */
-            $rows[] = [
-                $client->getIdentifier(),
-                $client->getName(),
-                $client->getGrantType()
-            ];
-        }
-
-        $this->output->outputTable(
-            $rows,
-            ['Identifier', 'Name', 'Grant Type']
-        );
-    }
-
-    /**
-     * Remove client
-     *
-     * Removes an existing client
-     *
-     * @param string $identifier The client identifier
-     */
-    public function removeClientCommand(string $identifier)
-    {
-        $client = $this->clientRepository->findOneByIdentifier($identifier);
-        if ($client === null) {
-            $this->outputLine('<error>Client not found.</error>');
-            $this->quit(1);
-        }
-
-        $this->clientRepository->remove($client);
-
-        $this->outputLine('Client removed.');
-    }
-
-    /**
-     * Generates a key pair for the OAuth server
-     *
-     * @return array
-     */
-    protected function generateKeyPair()
-    {
-        $filename = 'oauth_server_rsa';
-        if (file_exists('/tmp/' . $filename . '.pub')) {
-            unlink('/tmp/' . $filename . '.pub');
-        }
-        if (file_exists('/tmp/' . $filename)) {
-            unlink('/tmp/' . $filename);
-        }
-
-        $command = 'openssl genrsa -out /tmp/' . $filename . ' 4096 2>/dev/null';
-        exec($command, $output, $exitCode);
-        if ($exitCode !== 0) {
-            $consoleOutput = trim(implode("\n", $output), "\n");
-            return [false, false, $consoleOutput];
-        }
-
-        $command = 'openssl rsa -in /tmp/' . $filename . ' -pubout -out /tmp/' . $filename . '.pub 2>/dev/null';
-        exec($command, $output, $exitCode);
-        if ($exitCode !== 0) {
-            $consoleOutput = trim(implode("\n", $output), "\n");
-            return [false, false, $consoleOutput];
-        }
-
-        $privateKey = file_get_contents('/tmp/' . $filename);
-        $publicKey = file_get_contents('/tmp/' . $filename . '.pub');
-        unlink('/tmp/' . $filename);
-        unlink('/tmp/' . $filename . '.pub');
-
-        return [trim($privateKey), trim($publicKey), ''];
     }
 }

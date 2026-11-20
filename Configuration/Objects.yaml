@@ -1,0 +1,24 @@
+# An application replaces these two to resolve its hosts and to show its own consent page.
+Flownative\OAuth2\Server\IssuerResolverInterface:
+  className: 'Flownative\OAuth2\Server\RequestHostIssuerResolver'
+
+Flownative\OAuth2\Server\ConsentPageInterface:
+  className: 'Flownative\OAuth2\Server\ConfiguredConsentPage'
+
+# An application replaces this to bound the metadata document fetches per source address.
+Flownative\OAuth2\Server\ClientMetadataFetchThrottleInterface:
+  className: 'Flownative\OAuth2\Server\UnthrottledClientMetadataFetches'
+
+Flownative\OAuth2\Server\League\DbalClientRepository:
+  arguments:
+    4:
+      object:
+        factoryObjectName: Neos\Flow\Cache\CacheManager
+        factoryMethodName: getCache
+        arguments:
+          1:
+            value: Flownative_OAuth2_Server_RefusedClientMetadataDocuments
+
+# An application replaces this to decide which clients get refused requests redirected back.
+Flownative\OAuth2\Server\ErrorRedirectPolicyInterface:
+  className: 'Flownative\OAuth2\Server\RedirectErrorsOfApprovedClients'

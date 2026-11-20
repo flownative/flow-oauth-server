@@ -1,0 +1,4 @@
+# Client metadata documents that were refused lately, so that they are not fetched again at once.
+Flownative_OAuth2_Server_RefusedClientMetadataDocuments:
+  frontend: Neos\Cache\Frontend\StringFrontend
+  backend: Neos\Cache\Backend\FileBackend
