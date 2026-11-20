@@ -12,11 +12,13 @@ use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\Issuer;
 use Flownative\OAuth2\Server\League\AuthorizationCodes;
 use Flownative\OAuth2\Server\League\DbalRefreshTokenRepository;
+use Flownative\OAuth2\Server\Tests\Functional\Fixtures\SpendingProcess;
 use Flownative\OAuth2\Server\UnknownAuthorizationRequestException;
 use GuzzleHttp\Psr7\StreamDecoratorTrait;
 use GuzzleHttp\Psr7\Utils;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
+use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 
 class AuthorizationRequestTest extends AuthorizationServerTestCase
@@ -282,6 +284,89 @@ class AuthorizationRequestTest extends AuthorizationServerTestCase
             $connection->rollBack();
             $secondConnection->close();
         }
+    }
+
+    #[Test]
+    #[DataProvider('spendings')]
+    public function aCredentialPresentedAgainInARaceRevokesTheGrant(string $credential): void
+    {
+        $clientIdentifier = $this->registerClient();
+        $secret = $this->codeFor($clientIdentifier);
+        if ($credential === 'refresh token') {
+            $secret = self::json($this->exchange($clientIdentifier, $secret))['refresh_token'] ?? null;
+            self::assertIsString($secret);
+        }
+
+        // Spent outside the retry grace period, so that a refresh token presented again is a reuse.
+        $response = $this->presentWhileAnotherExchangeHoldsIt($credential, $secret, $clientIdentifier, 60);
+
+        self::assertSame('invalid_grant', self::json($response)['error']);
+        self::assertTrue($this->grantOfClientIsRevoked($clientIdentifier), 'the exchange which waited for the first one sees the credential spent before');
+    }
+
+    #[Test]
+    public function aRefreshTokenPresentedAgainInARaceWithinTheGracePeriodLeavesTheGrant(): void
+    {
+        $clientIdentifier = $this->registerClient();
+        $refreshToken = self::json($this->exchange($clientIdentifier, $this->codeFor($clientIdentifier)))['refresh_token'] ?? null;
+        self::assertIsString($refreshToken);
+
+        $response = $this->presentWhileAnotherExchangeHoldsIt('refresh token', $refreshToken, $clientIdentifier);
+
+        self::assertSame('invalid_grant', self::json($response)['error']);
+        self::assertFalse($this->grantOfClientIsRevoked($clientIdentifier), 'the exchange which waited for the first one sees when the token was spent');
+    }
+
+    /**
+     * Another process spends the credential and holds its transaction open,
+     * while this one presents the credential through the token endpoint and
+     * waits for the locks.
+     */
+    private function presentWhileAnotherExchangeHoldsIt(string $credential, string $secret, string $clientIdentifier, int $spentSecondsAgo = 0): ResponseInterface
+    {
+        $process = proc_open(SpendingProcess::command(), [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($process);
+        fwrite($pipes[0], json_encode([
+            'connection' => self::plainConnectionParameters($this->objectManager->get(Connection::class)->getParams()),
+            'credential' => $credential,
+            'secret' => $secret,
+            'holdSeconds' => 1,
+            'spentSecondsAgo' => $spentSecondsAgo,
+        ], JSON_THROW_ON_ERROR));
+        fclose($pipes[0]);
+        $said = fgets($pipes[1]);
+        if ($said !== "held\n") {
+            self::fail('The first exchange did not spend the credential: ' . $said . stream_get_contents($pipes[2]));
+        }
+
+        $startedAt = microtime(true);
+        $response = $credential === 'code' ? $this->exchange($clientIdentifier, $secret) : $this->refresh($clientIdentifier, $secret);
+        $waited = microtime(true) - $startedAt;
+
+        stream_get_contents($pipes[1]);
+        $errors = stream_get_contents($pipes[2]);
+        self::assertSame(0, proc_close($process), 'the first exchange committed: ' . $errors);
+        self::assertGreaterThan(0.5, $waited, 'the second exchange waited for the first one');
+        return $response;
+    }
+
+    private function grantOfClientIsRevoked(string $clientIdentifier): bool
+    {
+        $revokedAt = $this->objectManager->get(Connection::class)->fetchOne('SELECT revoked_at FROM flownative_oauth2_server_grant WHERE client_id = :clientId', ['clientId' => $clientIdentifier]);
+        self::assertNotFalse($revokedAt, 'the client has a grant');
+        return $revokedAt !== null;
+    }
+
+    /**
+     * Only what reaches the database: an application's own driver, wrapper or
+     * middlewares may need constructor arguments the spending process cannot give.
+     *
+     * @param array<string, mixed> $parameters
+     * @return array<string, mixed>
+     */
+    private static function plainConnectionParameters(array $parameters): array
+    {
+        return array_intersect_key($parameters, array_flip(['driver', 'host', 'port', 'dbname', 'user', 'password', 'unix_socket', 'charset', 'serverVersion']));
     }
 
     private static function inPieces(string $content): StreamInterface

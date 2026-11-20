@@ -106,6 +106,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
 
     /**
      * A token that was spent before: presented again, it is the sign of a stolen one.
+     * Ask only after spend() found nothing, in the same transaction.
      */
     public function spentBefore(string $secret): ?SpentRefreshToken
     {
@@ -113,7 +114,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
             'SELECT t.grant_id, t.access_token_digest, g.client_id, g.resource, g.scopes
              FROM flownative_oauth2_server_refresh_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
-             WHERE t.token_digest = :digest AND t.spent_at IS NOT NULL',
+             WHERE t.token_digest = :digest AND t.spent_at IS NOT NULL' . $this->lockingReadOnMysql(),
             ['digest' => TokenSecret::digest($secret)]
         );
         return $row === false ? null : SpentRefreshToken::fromRow($row);
@@ -123,7 +124,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
     {
         if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
             return $this->connection->fetchOne(
-                'SELECT 1 FROM flownative_oauth2_server_refresh_token WHERE token_digest = :digest AND spent_at > :spentAfter',
+                'SELECT 1 FROM flownative_oauth2_server_refresh_token WHERE token_digest = :digest AND spent_at > :spentAfter' . $this->lockingReadOnMysql(),
                 ['digest' => TokenSecret::digest($secret), 'spentAfter' => DatabasePlatform::MYSQL->timestamp(new DateTimeImmutable(sprintf('-%d seconds', $seconds)))]
             ) !== false;
         }
@@ -132,6 +133,17 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
              WHERE token_digest = :digest AND spent_at > now() - make_interval(secs => :seconds)',
             ['digest' => TokenSecret::digest($secret), 'seconds' => $seconds]
         ) !== false;
+    }
+
+    /**
+     * InnoDB reads a transaction's snapshot, taken before spend() waited for
+     * the grant lock. A plain read after a concurrent spend would still see
+     * the token unspent, so the reads that follow a spend lock the rows and
+     * see what was committed meanwhile. The grant row is held already.
+     */
+    private function lockingReadOnMysql(): string
+    {
+        return DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL ? ' FOR UPDATE' : '';
     }
 
     /**

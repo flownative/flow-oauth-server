@@ -81,6 +81,35 @@ class SpendingOnMysqlTest extends TestCase
         self::assertCount(1, $this->statements);
     }
 
+    #[Test]
+    #[DataProvider('credentials')]
+    public function theReadsAfterASpendFoundNothingLockTheRows(string $credential): void
+    {
+        $statements = [];
+        $connection = $this->createStub(Connection::class);
+        $connection->method('getDatabasePlatform')->willReturn(new MySQLPlatform());
+        $connection->method('fetchAssociative')->willReturnCallback(static function (string $sql) use (&$statements): false {
+            $statements[] = $sql;
+            return false;
+        });
+        $connection->method('fetchOne')->willReturnCallback(static function (string $sql) use (&$statements): false {
+            $statements[] = $sql;
+            return false;
+        });
+
+        if ($credential === 'code') {
+            (new AuthorizationCodes($connection))->spentBefore('the-code');
+        } else {
+            (new DbalRefreshTokenRepository($connection))->spentBefore('the-refresh-token');
+            (new DbalRefreshTokenRepository($connection))->wasSpentWithin('the-refresh-token', 3);
+        }
+
+        self::assertNotEmpty($statements);
+        foreach ($statements as $statement) {
+            self::assertStringEndsWith('FOR UPDATE', $statement, 'a plain read sees the snapshot from before the lock wait');
+        }
+    }
+
     private function spend(string $credential, Connection $connection): ?object
     {
         return $credential === 'code'

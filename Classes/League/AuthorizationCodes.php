@@ -76,6 +76,7 @@ class AuthorizationCodes
 
     /**
      * A code that was spent before, so that a second use by its client can revoke its tokens.
+     * Ask only after spend() found nothing, in the same transaction.
      */
     public function spentBefore(string $code): ?SpentAuthorizationCode
     {
@@ -83,10 +84,21 @@ class AuthorizationCodes
             'SELECT c.grant_id, c.redirect_uri, c.code_challenge, g.client_id, g.resource, g.scopes
              FROM flownative_oauth2_server_authorization_code c
              JOIN flownative_oauth2_server_grant g ON g.grant_id = c.grant_id
-             WHERE c.code_digest = :digest AND c.spent_at IS NOT NULL',
+             WHERE c.code_digest = :digest AND c.spent_at IS NOT NULL' . $this->lockingReadOnMysql(),
             ['digest' => TokenSecret::digest($code)]
         );
         return $row === false ? null : SpentAuthorizationCode::fromRow($row);
+    }
+
+    /**
+     * InnoDB reads a transaction's snapshot, taken before spend() waited for
+     * the grant lock. A plain read after a concurrent spend would still see
+     * the code unspent, so the read that follows a spend locks the rows and
+     * sees what was committed meanwhile. The grant row is held already.
+     */
+    private function lockingReadOnMysql(): string
+    {
+        return DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL ? ' FOR UPDATE' : '';
     }
 
     /**
