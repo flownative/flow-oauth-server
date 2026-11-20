@@ -26,6 +26,13 @@ use Neos\Flow\Annotations as Flow;
 #[Flow\Scope('singleton')]
 class DbalClientRepository implements ClientRepositoryInterface
 {
+    /**
+     * The longest client identifier the tables take: MySQL indexes at most
+     * 768 characters. A longer one is unknown on every database, so that it
+     * gets an OAuth error answer instead of a database error.
+     */
+    public const int MAXIMUM_CLIENT_IDENTIFIER_LENGTH = 768;
+
     #[Flow\InjectConfiguration(path: 'clientMetadataDocuments.enabled')]
     protected bool $metadataDocumentsEnabled;
 
@@ -45,7 +52,7 @@ class DbalClientRepository implements ClientRepositoryInterface
 
     public function getClientEntity(string $clientIdentifier): ?ClientEntityInterface
     {
-        if ($clientIdentifier === '') {
+        if ($clientIdentifier === '' || mb_strlen($clientIdentifier) > self::MAXIMUM_CLIENT_IDENTIFIER_LENGTH) {
             return null;
         }
         $row = $this->findServingClient($clientIdentifier);
@@ -64,7 +71,7 @@ class DbalClientRepository implements ClientRepositoryInterface
      */
     public function learnFromMetadataDocument(string $clientIdentifier, string $sourceAddress): void
     {
-        if (!$this->metadataDocumentsEnabled || !ClientMetadataDocuments::isDocumentAddress($clientIdentifier)) {
+        if (!$this->metadataDocumentsEnabled || mb_strlen($clientIdentifier) > self::MAXIMUM_CLIENT_IDENTIFIER_LENGTH || !ClientMetadataDocuments::isDocumentAddress($clientIdentifier)) {
             return;
         }
         $now = DatabasePlatform::of($this->connection)->now();
