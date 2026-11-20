@@ -44,10 +44,11 @@ class AuthorizationRequests
             $request->resource,
             (new DateTimeImmutable())->add(new DateInterval($this->lifetime)),
         );
+        $platform = DatabasePlatform::of($this->connection);
         $this->connection->executeStatement(
-            'INSERT INTO flownative_oauth2_server_authorization_request
+            "INSERT INTO flownative_oauth2_server_authorization_request
                 (request_id, issuer, client_id, client_name, redirect_uri, state, scopes, code_challenge, resource, created_at, expires_at)
-             VALUES (:requestId, :issuer, :clientId, :clientName, :redirectUri, :state, :scopes, :codeChallenge, :resource, now(), :expiresAt)',
+             VALUES (:requestId, :issuer, :clientId, :clientName, :redirectUri, :state, :scopes, :codeChallenge, :resource, {$platform->now()}, :expiresAt)",
             [
                 'requestId' => $pendingRequest->identifier,
                 'issuer' => $issuer->value,
@@ -58,7 +59,7 @@ class AuthorizationRequests
                 'scopes' => json_encode($pendingRequest->scopes, JSON_THROW_ON_ERROR),
                 'codeChallenge' => $pendingRequest->codeChallenge,
                 'resource' => $pendingRequest->resource,
-                'expiresAt' => $pendingRequest->expiresAt->format(DATE_ATOM),
+                'expiresAt' => $platform->timestamp($pendingRequest->expiresAt),
             ]
         );
         return $pendingRequest;
@@ -69,8 +70,9 @@ class AuthorizationRequests
      */
     public function find(string $requestIdentifier, Issuer $issuer): ?PendingAuthorizationRequest
     {
+        $now = DatabasePlatform::of($this->connection)->now();
         $row = $this->connection->fetchAssociative(
-            'SELECT * FROM flownative_oauth2_server_authorization_request WHERE request_id = :requestId AND issuer = :issuer AND expires_at > now()',
+            "SELECT * FROM flownative_oauth2_server_authorization_request WHERE request_id = :requestId AND issuer = :issuer AND expires_at > {$now}",
             ['requestId' => $requestIdentifier, 'issuer' => $issuer->value]
         );
         return $row === false ? null : PendingAuthorizationRequest::fromRow($row);
@@ -116,13 +118,37 @@ class AuthorizationRequests
      */
     private function spend(string $requestIdentifier, Issuer $issuer): PendingAuthorizationRequest
     {
-        $row = $this->connection->fetchAssociative(
-            'DELETE FROM flownative_oauth2_server_authorization_request WHERE request_id = :requestId AND issuer = :issuer AND expires_at > now() RETURNING *',
-            ['requestId' => $requestIdentifier, 'issuer' => $issuer->value]
-        );
+        $row = $this->deleteWaitingRequest($requestIdentifier, $issuer);
         if ($row === false) {
             throw new UnknownAuthorizationRequestException('The authorization request is unknown, expired or answered', 1795083658);
         }
         return PendingAuthorizationRequest::fromRow($row);
+    }
+
+    /**
+     * Deletes the request if it is still waiting and returns its row, so that
+     * only one answer gets it. On MySQL the row lock decides: a concurrent
+     * answer waits for it and then finds the request gone.
+     *
+     * @return array<string, mixed>|false
+     */
+    private function deleteWaitingRequest(string $requestIdentifier, Issuer $issuer): array|false
+    {
+        if (DatabasePlatform::of($this->connection) === DatabasePlatform::POSTGRESQL) {
+            return $this->connection->fetchAssociative(
+                'DELETE FROM flownative_oauth2_server_authorization_request WHERE request_id = :requestId AND issuer = :issuer AND expires_at > now() RETURNING *',
+                ['requestId' => $requestIdentifier, 'issuer' => $issuer->value]
+            );
+        }
+        return $this->connection->transactional(static function (Connection $connection) use ($requestIdentifier, $issuer): array|false {
+            $row = $connection->fetchAssociative(
+                'SELECT * FROM flownative_oauth2_server_authorization_request WHERE request_id = :requestId AND issuer = :issuer AND expires_at > UTC_TIMESTAMP(6) FOR UPDATE',
+                ['requestId' => $requestIdentifier, 'issuer' => $issuer->value]
+            );
+            if ($row !== false) {
+                $connection->executeStatement('DELETE FROM flownative_oauth2_server_authorization_request WHERE request_id = :requestId', ['requestId' => $requestIdentifier]);
+            }
+            return $row;
+        });
     }
 }

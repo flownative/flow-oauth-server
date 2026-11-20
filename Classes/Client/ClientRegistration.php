@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Flownative\OAuth2\Server\Client;
 
+use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
+use Flownative\OAuth2\Server\DatabasePlatform;
 use Neos\Flow\Annotations as Flow;
 use Neos\Flow\Utility\Algorithms;
 
@@ -56,15 +58,19 @@ class ClientRegistration
 
         $clientIdentifier = Algorithms::generateUUID();
         $issuedAt = time();
+        [$createdAt, $issuedAtParameter] = match (DatabasePlatform::of($this->connection)) {
+            DatabasePlatform::POSTGRESQL => ['to_timestamp(:issuedAt)', $issuedAt],
+            DatabasePlatform::MYSQL => [':issuedAt', DatabasePlatform::MYSQL->timestamp(new DateTimeImmutable('@' . $issuedAt))],
+        };
         $this->connection->executeStatement(
             "INSERT INTO flownative_oauth2_server_client (client_id, client_name, redirect_uris, origin, registered_from, created_at)
-             VALUES (:clientId, :clientName, :redirectUris, 'registration', :registeredFrom, to_timestamp(:issuedAt))",
+             VALUES (:clientId, :clientName, :redirectUris, 'registration', :registeredFrom, {$createdAt})",
             [
                 'clientId' => $clientIdentifier,
                 'clientName' => $name,
                 'redirectUris' => json_encode($acceptedRedirectUris, JSON_THROW_ON_ERROR),
                 'registeredFrom' => $registeredFrom,
-                'issuedAt' => $issuedAt,
+                'issuedAt' => $issuedAtParameter,
             ]
         );
 

@@ -32,12 +32,13 @@ class AccessTokenValidator
 
     public function validate(string $accessToken, Issuer $issuer): ?ValidatedAccessToken
     {
+        $now = DatabasePlatform::of($this->connection)->now();
         $row = $this->connection->fetchAssociative(
-            'SELECT t.grant_id, t.scopes, g.subject, g.client_id
+            "SELECT t.grant_id, t.scopes, g.subject, g.client_id
              FROM flownative_oauth2_server_access_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
              WHERE t.token_digest = :digest AND t.resource = :resource
-               AND t.revoked_at IS NULL AND t.expires_at > now() AND g.revoked_at IS NULL',
+               AND t.revoked_at IS NULL AND t.expires_at > {$now} AND g.revoked_at IS NULL",
             ['digest' => TokenSecret::digest($accessToken), 'resource' => $this->endpoints->resourceOf($issuer)]
         );
         if ($row === false) {
@@ -56,12 +57,13 @@ class AccessTokenValidator
      */
     public function refusalOf(string $accessToken, Issuer $issuer): AccessTokenRefusal
     {
+        $now = DatabasePlatform::of($this->connection)->now();
         $row = $this->connection->fetchAssociative(
-            'SELECT t.grant_id, g.client_id,
-                    t.revoked_at IS NOT NULL AS token_revoked, t.expires_at <= now() AS expired, g.revoked_at IS NOT NULL AS grant_revoked
+            "SELECT t.grant_id, g.client_id,
+                    t.revoked_at IS NOT NULL AS token_revoked, t.expires_at <= {$now} AS expired, g.revoked_at IS NOT NULL AS grant_revoked
              FROM flownative_oauth2_server_access_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
-             WHERE t.token_digest = :digest',
+             WHERE t.token_digest = :digest",
             ['digest' => TokenSecret::digest($accessToken)]
         );
         if ($row === false) {

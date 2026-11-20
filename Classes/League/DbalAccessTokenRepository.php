@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Flownative\OAuth2\Server\League;
 
 use Doctrine\DBAL\Connection;
+use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\TokenSecret;
 use League\OAuth2\Server\Entities\AccessTokenEntityInterface;
 use League\OAuth2\Server\Entities\ClientEntityInterface;
@@ -51,16 +52,17 @@ class DbalAccessTokenRepository implements AccessTokenRepositoryInterface
         if (!$accessTokenEntity instanceof AccessToken) {
             throw new LogicException('Only opaque access tokens are persisted', 1795083642);
         }
+        $platform = DatabasePlatform::of($this->connection);
         $inserted = $this->connection->executeStatement(
-            'INSERT INTO flownative_oauth2_server_access_token (token_digest, grant_id, resource, scopes, created_at, expires_at)
-             SELECT :digest, g.grant_id, g.resource, :scopes, now(), :expiresAt
+            "INSERT INTO flownative_oauth2_server_access_token (token_digest, grant_id, resource, scopes, created_at, expires_at)
+             SELECT :digest, g.grant_id, g.resource, :scopes, {$platform->now()}, :expiresAt
              FROM flownative_oauth2_server_grant g
-             WHERE g.grant_id = :grantId AND g.revoked_at IS NULL',
+             WHERE g.grant_id = :grantId AND g.revoked_at IS NULL",
             [
                 'digest' => $accessTokenEntity->digest(),
                 'grantId' => $accessTokenEntity->getUserIdentifier(),
                 'scopes' => json_encode(array_map(static fn (ScopeEntityInterface $scope): string => $scope->getIdentifier(), $accessTokenEntity->getScopes()), JSON_THROW_ON_ERROR),
-                'expiresAt' => $accessTokenEntity->getExpiryDateTime()->format(DATE_ATOM),
+                'expiresAt' => $platform->timestamp($accessTokenEntity->getExpiryDateTime()),
             ]
         );
         if ($inserted !== 1) {
@@ -75,8 +77,9 @@ class DbalAccessTokenRepository implements AccessTokenRepositoryInterface
 
     public function revokeByDigest(string $digest): void
     {
+        $now = DatabasePlatform::of($this->connection)->now();
         $this->connection->executeStatement(
-            'UPDATE flownative_oauth2_server_access_token SET revoked_at = now() WHERE token_digest = :digest AND revoked_at IS NULL',
+            "UPDATE flownative_oauth2_server_access_token SET revoked_at = {$now} WHERE token_digest = :digest AND revoked_at IS NULL",
             ['digest' => $digest]
         );
     }
