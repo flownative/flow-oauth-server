@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Flownative\OAuth2\Server;
 
 use Doctrine\DBAL\Connection;
+use InvalidArgumentException;
 use Neos\Flow\Annotations as Flow;
 use Neos\Flow\Utility\Algorithms;
 
@@ -16,6 +17,12 @@ use Neos\Flow\Utility\Algorithms;
 #[Flow\Scope('singleton')]
 class Grants
 {
+    /**
+     * The longest subject the tables take: MySQL indexes at most 768
+     * characters. A longer one is refused on every database.
+     */
+    public const int MAXIMUM_SUBJECT_LENGTH = 768;
+
     public function __construct(
         private readonly Connection $connection,
     ) {
@@ -26,6 +33,9 @@ class Grants
      */
     public function create(PendingAuthorizationRequest $request, string $subject): string
     {
+        if (mb_strlen($subject) > self::MAXIMUM_SUBJECT_LENGTH) {
+            throw new InvalidArgumentException(sprintf('A subject may be at most %d characters long', self::MAXIMUM_SUBJECT_LENGTH), 1795206411);
+        }
         $grantIdentifier = Algorithms::generateUUID();
         assert($grantIdentifier !== '');
         $now = DatabasePlatform::of($this->connection)->now();

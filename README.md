@@ -34,13 +34,15 @@ person sees, the consent page above all, stay with the application.
 The package brings its tables as Doctrine migrations for PostgreSQL
 (`Migrations/Postgresql`) and for MySQL and MariaDB (`Migrations/Mysql`);
 `./flow doctrine:migrate` runs the ones of the configured database.
-On MySQL and MariaDB the tables store their timestamps in UTC, and
-subjects can be at most 768 characters long, the longest key an index
-takes. MySQL older than 8.0.17 ignores the CHECK constraints of the
-tables and lacks `utf8mb4_0900_bin`, the binary collation without
-padding which makes an identifier match only itself. Client identifiers
-are limited to 768 characters on every database: a longer one is
-answered as an unknown client.
+On MySQL and MariaDB the tables store their timestamps in UTC. MySQL
+older than 8.0.17 ignores the CHECK constraints of the tables and lacks
+`utf8mb4_0900_bin`, the binary collation without padding which makes an
+identifier match only itself.
+
+Subjects and client identifiers are limited to 768 characters on every
+database, the longest key a MySQL index takes. A longer client
+identifier is answered as an unknown client; approving a request for a
+longer subject fails with an `InvalidArgumentException`.
 
 ## Installation
 
