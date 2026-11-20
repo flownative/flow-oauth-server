@@ -29,7 +29,14 @@ person sees, the consent page above all, stay with the application.
 
 - PHP 8.4 or 8.5 with the curl and mbstring extensions
 - Flow 9
-- PostgreSQL: the package brings its tables as a PostgreSQL migration
+- PostgreSQL, MySQL 8.0 or later, or MariaDB 10.6 or later
+
+The package brings its tables as Doctrine migrations for PostgreSQL
+(`Migrations/Postgresql`) and for MySQL and MariaDB (`Migrations/Mysql`);
+`./flow doctrine:migrate` runs the ones of the configured database.
+On MySQL and MariaDB the tables store their timestamps in UTC, and client
+identifiers and subjects can be at most 768 characters long, the longest
+key an index takes.
 
 ## Installation
 
