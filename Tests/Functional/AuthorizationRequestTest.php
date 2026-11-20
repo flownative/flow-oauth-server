@@ -8,6 +8,7 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\DBAL\Exception as DbalException;
 use Flownative\OAuth2\Server\AuthorizationRequests;
+use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\Issuer;
 use Flownative\OAuth2\Server\League\AuthorizationCodes;
 use Flownative\OAuth2\Server\League\DbalRefreshTokenRepository;
@@ -197,21 +198,34 @@ class AuthorizationRequestTest extends AuthorizationServerTestCase
     }
 
     #[Test]
-    public function aCodeIsSpentOnceEvenWhenTwoExchangesRace(): void
+    #[DataProvider('spendings')]
+    public function aCredentialIsSpentOnceEvenWhenTwoExchangesRace(string $credential): void
     {
         $clientIdentifier = $this->registerClient();
         $code = $this->codeFor($clientIdentifier);
+        $refreshToken = null;
+        if ($credential === 'refresh token') {
+            $refreshToken = self::json($this->exchange($clientIdentifier, $code))['refresh_token'] ?? null;
+            self::assertIsString($refreshToken);
+        }
         $connection = $this->objectManager->get(Connection::class);
         $codes = $this->objectManager->get(AuthorizationCodes::class);
+        $refreshTokens = $this->objectManager->get(DbalRefreshTokenRepository::class);
         $secondConnection = DriverManager::getConnection($connection->getParams());
-        $secondConnection->executeStatement("SET lock_timeout = '200ms'");
+        $secondConnection->executeStatement(match ($this->databasePlatform()) {
+            DatabasePlatform::POSTGRESQL => "SET lock_timeout = '200ms'",
+            DatabasePlatform::MYSQL => 'SET SESSION innodb_lock_wait_timeout = 1',
+        });
+        $spend = static fn (Connection $connection): ?object => $refreshToken === null
+            ? (new AuthorizationCodes($connection))->spend($code)
+            : (new DbalRefreshTokenRepository($connection))->spend($refreshToken);
 
         $connection->beginTransaction();
         try {
-            self::assertNotNull($this->objectManager->get(AuthorizationCodes::class)->spend($code));
+            self::assertNotNull($spend($connection));
             try {
-                (new AuthorizationCodes($secondConnection))->spend($code);
-                self::fail('A second exchange spent the code while the first one held it');
+                $spend($secondConnection);
+                self::fail('A second exchange spent the credential while the first one held it');
             } catch (DbalException) {
                 // The second exchange waits for the first one's row.
             }
@@ -222,10 +236,11 @@ class AuthorizationRequestTest extends AuthorizationServerTestCase
             }
         }
 
-        self::assertNull((new AuthorizationCodes($secondConnection))->spend($code), 'after the first one committed, the code is spent');
+        self::assertNull($spend($secondConnection), 'after the first one committed, the credential is spent');
         $secondConnection->close();
         // A singleton made with new registers itself in its place.
         $this->objectManager->setInstance(AuthorizationCodes::class, $codes);
+        $this->objectManager->setInstance(DbalRefreshTokenRepository::class, $refreshTokens);
     }
 
     /**
