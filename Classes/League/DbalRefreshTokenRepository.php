@@ -13,6 +13,7 @@ use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
 use LogicException;
 use Neos\Flow\Annotations as Flow;
 use RuntimeException;
+use SensitiveParameter;
 
 /**
  * Refresh tokens by digest, each spent once under a lock of its grant.
@@ -57,7 +58,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
         }
     }
 
-    public function revokeRefreshToken(string $tokenId): void
+    public function revokeRefreshToken(#[SensitiveParameter] string $tokenId): void
     {
         $now = DatabasePlatform::of($this->connection)->now();
         $this->connection->executeStatement(
@@ -66,7 +67,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
         );
     }
 
-    public function isRefreshTokenRevoked(string $tokenId): bool
+    public function isRefreshTokenRevoked(#[SensitiveParameter] string $tokenId): bool
     {
         return $this->connection->fetchOne(
             'SELECT 1 FROM flownative_oauth2_server_refresh_token t
@@ -81,7 +82,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
      * under, or null; a concurrent second spend waits for the row and finds it
      * spent. The grant row is locked first, in the order revoking takes.
      */
-    public function spend(string $secret): ?SpentRefreshToken
+    public function spend(#[SensitiveParameter] string $secret): ?SpentRefreshToken
     {
         $digest = TokenSecret::digest($secret);
         if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
@@ -108,7 +109,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
      * A token that was spent before: presented again, it is the sign of a stolen one.
      * Ask only after spend() found nothing, in the same transaction.
      */
-    public function spentBefore(string $secret): ?SpentRefreshToken
+    public function spentBefore(#[SensitiveParameter] string $secret): ?SpentRefreshToken
     {
         $row = $this->connection->fetchAssociative(
             'SELECT t.grant_id, t.access_token_digest, g.client_id, g.resource, g.scopes
@@ -120,7 +121,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
         return $row === false ? null : SpentRefreshToken::fromRow($row);
     }
 
-    public function wasSpentWithin(string $secret, int $seconds): bool
+    public function wasSpentWithin(#[SensitiveParameter] string $secret, int $seconds): bool
     {
         if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
             return $this->connection->fetchOne(

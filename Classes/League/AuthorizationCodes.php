@@ -10,6 +10,7 @@ use Doctrine\DBAL\Connection;
 use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\TokenSecret;
 use Neos\Flow\Annotations as Flow;
+use SensitiveParameter;
 
 /**
  * Authorization codes by digest, each spent once under a lock of its grant.
@@ -51,7 +52,7 @@ class AuthorizationCodes
     /**
      * The grant row is locked first, in the order revoking takes.
      */
-    public function spend(string $code): ?SpentAuthorizationCode
+    public function spend(#[SensitiveParameter] string $code): ?SpentAuthorizationCode
     {
         $digest = TokenSecret::digest($code);
         if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
@@ -78,7 +79,7 @@ class AuthorizationCodes
      * A code that was spent before, so that a second use by its client can revoke its tokens.
      * Ask only after spend() found nothing, in the same transaction.
      */
-    public function spentBefore(string $code): ?SpentAuthorizationCode
+    public function spentBefore(#[SensitiveParameter] string $code): ?SpentAuthorizationCode
     {
         $row = $this->connection->fetchAssociative(
             'SELECT c.grant_id, c.redirect_uri, c.code_challenge, g.client_id, g.resource, g.scopes

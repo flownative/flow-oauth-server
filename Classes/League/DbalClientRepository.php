@@ -15,6 +15,7 @@ use League\OAuth2\Server\Entities\ClientEntityInterface;
 use League\OAuth2\Server\Repositories\ClientRepositoryInterface;
 use Neos\Cache\Frontend\FrontendInterface;
 use Neos\Flow\Annotations as Flow;
+use SensitiveParameter;
 
 /**
  * Registered clients, and clients known by a metadata document at their
@@ -59,7 +60,7 @@ class DbalClientRepository implements ClientRepositoryInterface
         return $row === false ? null : new Client($clientIdentifier, Rows::string($row, 'client_name'), Rows::stringList($row, 'redirect_uris'));
     }
 
-    public function validateClient(string $clientIdentifier, ?string $clientSecret, ?string $grantType): bool
+    public function validateClient(string $clientIdentifier, #[SensitiveParameter] ?string $clientSecret, ?string $grantType): bool
     {
         return ($clientSecret === null || $clientSecret === '') && $this->getClientEntity($clientIdentifier) !== null;
     }

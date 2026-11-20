@@ -7,6 +7,7 @@ namespace Flownative\OAuth2\Server;
 use Doctrine\DBAL\Connection;
 use Neos\Flow\Annotations as Flow;
 use Psr\Http\Message\ServerRequestInterface;
+use SensitiveParameter;
 
 /**
  * Checks the bearer token of a request to the protected resource. A token
@@ -30,7 +31,7 @@ class AccessTokenValidator
         return $this->validate($matches[1], $issuer);
     }
 
-    public function validate(string $accessToken, Issuer $issuer): ?ValidatedAccessToken
+    public function validate(#[SensitiveParameter] string $accessToken, Issuer $issuer): ?ValidatedAccessToken
     {
         $now = DatabasePlatform::of($this->connection)->now();
         $row = $this->connection->fetchAssociative(
@@ -55,7 +56,7 @@ class AccessTokenValidator
     /**
      * Why validate() refused the token; only for the log, never for the client.
      */
-    public function refusalOf(string $accessToken, Issuer $issuer): AccessTokenRefusal
+    public function refusalOf(#[SensitiveParameter] string $accessToken, Issuer $issuer): AccessTokenRefusal
     {
         $now = DatabasePlatform::of($this->connection)->now();
         $row = $this->connection->fetchAssociative(

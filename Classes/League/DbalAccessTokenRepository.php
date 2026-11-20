@@ -14,6 +14,7 @@ use League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface;
 use LogicException;
 use Neos\Flow\Annotations as Flow;
 use RuntimeException;
+use SensitiveParameter;
 
 /**
  * Access tokens by digest. League's user identifier of a token is the grant
@@ -70,7 +71,7 @@ class DbalAccessTokenRepository implements AccessTokenRepositoryInterface
         }
     }
 
-    public function revokeAccessToken(string $tokenId): void
+    public function revokeAccessToken(#[SensitiveParameter] string $tokenId): void
     {
         $this->revokeByDigest(TokenSecret::digest($this->prefix . $tokenId));
     }
@@ -84,7 +85,7 @@ class DbalAccessTokenRepository implements AccessTokenRepositoryInterface
         );
     }
 
-    public function isAccessTokenRevoked(string $tokenId): bool
+    public function isAccessTokenRevoked(#[SensitiveParameter] string $tokenId): bool
     {
         return $this->connection->fetchOne(
             'SELECT 1 FROM flownative_oauth2_server_access_token t

@@ -8,6 +8,7 @@ use Doctrine\DBAL\Connection;
 use InvalidArgumentException;
 use Neos\Flow\Annotations as Flow;
 use Neos\Flow\Utility\Algorithms;
+use SensitiveParameter;
 
 /**
  * A grant is what a subject approved for one client; every code and token is
@@ -82,7 +83,7 @@ class Grants
     /**
      * Revokes the grant behind an access or refresh token if the token was issued to the client (RFC 7009).
      */
-    public function revokeByToken(string $token, string $clientIdentifier): bool
+    public function revokeByToken(#[SensitiveParameter] string $token, string $clientIdentifier): bool
     {
         $grantIdentifier = $this->connection->fetchOne(
             'SELECT g.grant_id FROM flownative_oauth2_server_grant g
