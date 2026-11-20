@@ -87,10 +87,12 @@ class DbalAccessTokenRepository implements AccessTokenRepositoryInterface
 
     public function isAccessTokenRevoked(#[SensitiveParameter] string $tokenId): bool
     {
+        $platform = DatabasePlatform::of($this->connection);
         return $this->connection->fetchOne(
             'SELECT 1 FROM flownative_oauth2_server_access_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
-             WHERE t.token_digest = :digest AND t.revoked_at IS NULL AND g.revoked_at IS NULL',
+             WHERE t.token_digest = :digest AND t.revoked_at IS NULL AND g.revoked_at IS NULL
+               AND (g.expires_at IS NULL OR g.expires_at > ' . $platform->now() . ')',
             ['digest' => TokenSecret::digest($this->prefix . $tokenId)]
         ) === false;
     }

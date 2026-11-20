@@ -43,7 +43,8 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
         $platform = DatabasePlatform::of($this->connection);
         $inserted = $this->connection->executeStatement(
             "INSERT INTO flownative_oauth2_server_refresh_token (token_digest, grant_id, access_token_digest, created_at, expires_at)
-             SELECT :digest, g.grant_id, :accessTokenDigest, {$platform->now()}, :expiresAt
+             SELECT :digest, g.grant_id, :accessTokenDigest, {$platform->now()},
+                    CASE WHEN g.expires_at IS NOT NULL AND g.expires_at < :expiresAt THEN g.expires_at ELSE :expiresAt END
              FROM flownative_oauth2_server_grant g
              WHERE g.grant_id = :grantId AND g.revoked_at IS NULL",
             [
@@ -72,7 +73,8 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
         return $this->connection->fetchOne(
             'SELECT 1 FROM flownative_oauth2_server_refresh_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
-             WHERE t.token_digest = :digest AND t.spent_at IS NULL AND t.revoked_at IS NULL AND g.revoked_at IS NULL',
+             WHERE t.token_digest = :digest AND t.spent_at IS NULL AND t.revoked_at IS NULL AND g.revoked_at IS NULL
+               AND (g.expires_at IS NULL OR g.expires_at > now())',
             ['digest' => TokenSecret::digest($this->prefix . $tokenId)]
         ) === false;
     }
@@ -99,6 +101,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
              FROM flownative_oauth2_server_grant g
              WHERE t.token_digest = :digest AND g.grant_id = t.grant_id
                AND t.spent_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > now() AND g.revoked_at IS NULL
+               AND (g.expires_at IS NULL OR g.expires_at > now())
              RETURNING t.grant_id, t.access_token_digest, g.client_id, g.resource, g.scopes',
             ['digest' => $digest]
         );
@@ -169,6 +172,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
                  FROM flownative_oauth2_server_refresh_token t
                  JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
                  WHERE t.token_digest = :digest AND t.spent_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > UTC_TIMESTAMP(6) AND g.revoked_at IS NULL
+                   AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6))
                  FOR UPDATE',
                 ['digest' => $digest]
             );

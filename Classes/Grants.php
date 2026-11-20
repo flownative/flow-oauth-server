@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Flownative\OAuth2\Server;
 
+use DateInterval;
+use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
 use InvalidArgumentException;
 use Neos\Flow\Annotations as Flow;
@@ -24,6 +26,9 @@ class Grants
      */
     public const int MAXIMUM_SUBJECT_LENGTH = 768;
 
+    #[Flow\InjectConfiguration(path: 'lifetimes.grant')]
+    protected ?string $lifetime = null;
+
     public function __construct(
         private readonly Connection $connection,
     ) {
@@ -39,10 +44,10 @@ class Grants
         }
         $grantIdentifier = Algorithms::generateUUID();
         assert($grantIdentifier !== '');
-        $now = DatabasePlatform::of($this->connection)->now();
+        $platform = DatabasePlatform::of($this->connection);
         $this->connection->executeStatement(
-            "INSERT INTO flownative_oauth2_server_grant (grant_id, subject, client_id, client_name, redirect_uri, issuer, resource, scopes, created_at)
-             VALUES (:grantId, :subject, :clientId, :clientName, :redirectUri, :issuer, :resource, :scopes, {$now})",
+            "INSERT INTO flownative_oauth2_server_grant (grant_id, subject, client_id, client_name, redirect_uri, issuer, resource, scopes, created_at, expires_at)
+             VALUES (:grantId, :subject, :clientId, :clientName, :redirectUri, :issuer, :resource, :scopes, {$platform->now()}, :expiresAt)",
             [
                 'grantId' => $grantIdentifier,
                 'subject' => $subject,
@@ -52,6 +57,7 @@ class Grants
                 'issuer' => $request->issuer->value,
                 'resource' => $request->resource,
                 'scopes' => json_encode($request->scopes, JSON_THROW_ON_ERROR),
+                'expiresAt' => $this->lifetime === null ? null : $platform->timestamp((new DateTimeImmutable())->add(new DateInterval($this->lifetime))),
             ]
         );
         return $grantIdentifier;

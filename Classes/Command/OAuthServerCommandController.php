@@ -34,8 +34,9 @@ class OAuthServerCommandController extends CommandController
      *
      * Removes expired authorization requests, codes and tokens, cached client
      * metadata documents that may no longer serve even while a fetch fails,
-     * and registered clients that never got a grant. Grants stay, revoked
-     * ones included.
+     * and registered clients that never got a grant. Grants stay, revoked and
+     * expired ones included. The refresh tokens of an expired grant expire
+     * with it and go like the others.
      */
     public function collectGarbageCommand(): void
     {

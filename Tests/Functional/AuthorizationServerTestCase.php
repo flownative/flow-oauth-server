@@ -11,6 +11,7 @@ use Flownative\OAuth2\Server\ConfiguredConsentPage;
 use Flownative\OAuth2\Server\ConsentPageInterface;
 use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\ErrorRedirectPolicyInterface;
+use Flownative\OAuth2\Server\Grants;
 use Flownative\OAuth2\Server\Issuer;
 use Flownative\OAuth2\Server\IssuerResolverInterface;
 use Flownative\OAuth2\Server\RedirectErrorsOfApprovedClients;
@@ -24,6 +25,7 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use ReflectionProperty;
 use RuntimeException;
 
 /**
@@ -68,10 +70,19 @@ abstract class AuthorizationServerTestCase extends FunctionalTestCase
 
     protected function tearDown(): void
     {
+        $this->setGrantLifetime(null);
         foreach ($this->instancesOfTheApplication as $objectName => $instance) {
             $this->objectManager->setInstance($objectName, $instance);
         }
         parent::tearDown();
+    }
+
+    /**
+     * Sets lifetimes.grant for the grants approved from now on; null is no limit.
+     */
+    protected function setGrantLifetime(?string $lifetime): void
+    {
+        (new ReflectionProperty(Grants::class, 'lifetime'))->setValue($this->objectManager->get(Grants::class), $lifetime);
     }
 
     protected function databasePlatform(): DatabasePlatform
@@ -241,8 +252,8 @@ abstract class AuthorizationServerTestCase extends FunctionalTestCase
             return;
         }
         $versions = match (DatabasePlatform::of($connection)) {
-            DatabasePlatform::POSTGRESQL => ['Version20261119101252'],
-            DatabasePlatform::MYSQL => ['Version20261120190207', 'Version20261120201811', 'Version20261120203500'],
+            DatabasePlatform::POSTGRESQL => ['Version20261119101252', 'Version20261121090000'],
+            DatabasePlatform::MYSQL => ['Version20261120190207', 'Version20261120201811', 'Version20261120203500', 'Version20261121090100'],
         };
         foreach ($versions as $version) {
             $this->objectManager->get(DoctrineService::class)->executeMigration('Neos\\Flow\\Persistence\\Doctrine\\Migrations\\' . $version);

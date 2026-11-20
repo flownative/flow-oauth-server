@@ -44,6 +44,27 @@ class GarbageCollectionTest extends AuthorizationServerTestCase
         self::assertNotNull($this->objectManager->get(AccessTokenValidator::class)->validate($tokens['access_token'], $this->issuer()));
     }
 
+    #[Test]
+    public function theTokensOfAnExpiredGrantGoAndTheGrantStays(): void
+    {
+        $this->setGrantLifetime('PT1H');
+        $clientIdentifier = $this->registerClient();
+        $tokens = self::json($this->exchange($clientIdentifier, $this->codeFor($clientIdentifier)));
+        self::assertIsString($tokens['refresh_token']);
+        $connection = $this->objectManager->get(Connection::class);
+        $now = $this->databasePlatform()->now();
+        $expiredAt = $this->secondsBefore($now, 60);
+        $connection->executeStatement("UPDATE flownative_oauth2_server_grant SET expires_at = {$expiredAt}");
+        $connection->executeStatement("UPDATE flownative_oauth2_server_refresh_token SET expires_at = {$expiredAt}");
+        $connection->executeStatement("UPDATE flownative_oauth2_server_access_token SET expires_at = {$expiredAt}");
+
+        $output = $this->collectGarbage();
+
+        self::assertStringContainsString('1 refresh tokens removed', $output);
+        self::assertStringContainsString('1 access tokens removed', $output);
+        self::assertSame(1, (int)$connection->fetchOne('SELECT COUNT(*) FROM flownative_oauth2_server_grant'), 'an expired grant stays, as a revoked one does');
+    }
+
     private function collectGarbage(): string
     {
         $commandController = $this->objectManager->get(OAuthServerCommandController::class);

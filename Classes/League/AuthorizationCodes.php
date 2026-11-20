@@ -69,6 +69,7 @@ class AuthorizationCodes
              FROM flownative_oauth2_server_grant g
              WHERE c.code_digest = :digest AND g.grant_id = c.grant_id
                AND c.spent_at IS NULL AND c.expires_at > now() AND g.revoked_at IS NULL
+               AND (g.expires_at IS NULL OR g.expires_at > now())
              RETURNING c.grant_id, c.redirect_uri, c.code_challenge, g.client_id, g.resource, g.scopes',
             ['digest' => $digest]
         );
@@ -122,6 +123,7 @@ class AuthorizationCodes
                  FROM flownative_oauth2_server_authorization_code c
                  JOIN flownative_oauth2_server_grant g ON g.grant_id = c.grant_id
                  WHERE c.code_digest = :digest AND c.spent_at IS NULL AND c.expires_at > UTC_TIMESTAMP(6) AND g.revoked_at IS NULL
+                   AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6))
                  FOR UPDATE',
                 ['digest' => $digest]
             );

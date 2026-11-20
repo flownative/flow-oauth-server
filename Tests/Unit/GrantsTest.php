@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Flownative\OAuth2\Server\Tests\Unit;
 
 use DateTimeImmutable;
+use DateTimeZone;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Platforms\MySQLPlatform;
 use Flownative\OAuth2\Server\Grants;
@@ -13,6 +14,7 @@ use Flownative\OAuth2\Server\PendingAuthorizationRequest;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
 
 class GrantsTest extends TestCase
 {
@@ -37,6 +39,39 @@ class GrantsTest extends TestCase
         $connection->expects(self::once())->method('executeStatement')->with(self::anything(), self::callback(static fn (array $parameters): bool => $parameters['subject'] === $longest))->willReturn(1);
 
         self::assertNotSame('', (new Grants($connection))->create(self::request(), $longest));
+    }
+
+    #[Test]
+    public function aGrantWithoutALifetimeIsStoredWithoutExpiry(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->method('getDatabasePlatform')->willReturn(new MySQLPlatform());
+        $connection->expects(self::once())->method('executeStatement')->with(self::anything(), self::callback(static fn (array $parameters): bool => $parameters['expiresAt'] === null))->willReturn(1);
+
+        (new Grants($connection))->create(self::request(), 'subject');
+    }
+
+    #[Test]
+    public function aGrantExpiresAfterItsLifetime(): void
+    {
+        $connection = $this->createMock(Connection::class);
+        $connection->method('getDatabasePlatform')->willReturn(new MySQLPlatform());
+        $expiresAt = null;
+        $connection->expects(self::once())->method('executeStatement')->with(self::anything(), self::callback(static function (array $parameters) use (&$expiresAt): bool {
+            $expiresAt = $parameters['expiresAt'];
+            return true;
+        }))->willReturn(1);
+        $grants = new Grants($connection);
+        (new ReflectionProperty(Grants::class, 'lifetime'))->setValue($grants, 'P30D');
+
+        $before = new DateTimeImmutable('+30 days', new DateTimeZone('UTC'));
+        $grants->create(self::request(), 'subject');
+        $after = new DateTimeImmutable('+30 days', new DateTimeZone('UTC'));
+
+        self::assertIsString($expiresAt);
+        $expiry = new DateTimeImmutable($expiresAt, new DateTimeZone('UTC'));
+        self::assertGreaterThanOrEqual($before->getTimestamp(), $expiry->getTimestamp());
+        self::assertLessThanOrEqual($after->getTimestamp(), $expiry->getTimestamp());
     }
 
     private static function request(): PendingAuthorizationRequest

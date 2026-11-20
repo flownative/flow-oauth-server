@@ -39,7 +39,8 @@ class AccessTokenValidator
              FROM flownative_oauth2_server_access_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
              WHERE t.token_digest = :digest AND t.resource = :resource
-               AND t.revoked_at IS NULL AND t.expires_at > {$now} AND g.revoked_at IS NULL",
+               AND t.revoked_at IS NULL AND t.expires_at > {$now} AND g.revoked_at IS NULL
+               AND (g.expires_at IS NULL OR g.expires_at > {$now})",
             ['digest' => TokenSecret::digest($accessToken), 'resource' => $this->endpoints->resourceOf($issuer)]
         );
         if ($row === false) {
@@ -61,7 +62,8 @@ class AccessTokenValidator
         $now = DatabasePlatform::of($this->connection)->now();
         $row = $this->connection->fetchAssociative(
             "SELECT t.grant_id, g.client_id,
-                    t.revoked_at IS NOT NULL AS token_revoked, t.expires_at <= {$now} AS expired, g.revoked_at IS NOT NULL AS grant_revoked
+                    t.revoked_at IS NOT NULL AS token_revoked, t.expires_at <= {$now} AS expired, g.revoked_at IS NOT NULL AS grant_revoked,
+                    g.expires_at IS NOT NULL AND g.expires_at <= {$now} AS grant_expired
              FROM flownative_oauth2_server_access_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
              WHERE t.token_digest = :digest",
@@ -72,6 +74,7 @@ class AccessTokenValidator
         }
         $reason = match (true) {
             (bool)$row['grant_revoked'] => AccessTokenRefusalReason::GRANT_REVOKED,
+            (bool)$row['grant_expired'] => AccessTokenRefusalReason::GRANT_EXPIRED,
             (bool)$row['token_revoked'] => AccessTokenRefusalReason::REVOKED,
             (bool)$row['expired'] => AccessTokenRefusalReason::EXPIRED,
             default => AccessTokenRefusalReason::OTHER_RESOURCE,
