@@ -15,4 +15,5 @@ enum AccessTokenRefusalReason: string
     case EXPIRED = 'expired token';
     case REVOKED = 'revoked token';
     case GRANT_REVOKED = 'revoked grant';
+    case GRANT_EXPIRED = 'expired grant';
 }

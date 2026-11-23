@@ -7,11 +7,13 @@ namespace Flownative\OAuth2\Server\League;
 use DateInterval;
 use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
+use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\TokenSecret;
 use Neos\Flow\Annotations as Flow;
+use SensitiveParameter;
 
 /**
- * Authorization codes by digest, each spent once by a conditional UPDATE.
+ * Authorization codes by digest, each spent once under a lock of its grant.
  * They replace league's encrypted codes, so that the database alone decides
  * whether a code is good.
  */
@@ -32,15 +34,16 @@ class AuthorizationCodes
     public function issue(string $grantIdentifier, string $redirectUri, string $codeChallenge): string
     {
         $code = TokenSecret::generate();
+        $platform = DatabasePlatform::of($this->connection);
         $this->connection->executeStatement(
-            'INSERT INTO flownative_oauth2_server_authorization_code (code_digest, grant_id, redirect_uri, code_challenge, created_at, expires_at)
-             VALUES (:digest, :grantId, :redirectUri, :codeChallenge, now(), :expiresAt)',
+            "INSERT INTO flownative_oauth2_server_authorization_code (code_digest, grant_id, redirect_uri, code_challenge, created_at, expires_at)
+             VALUES (:digest, :grantId, :redirectUri, :codeChallenge, {$platform->now()}, :expiresAt)",
             [
                 'digest' => TokenSecret::digest($code),
                 'grantId' => $grantIdentifier,
                 'redirectUri' => $redirectUri,
                 'codeChallenge' => $codeChallenge,
-                'expiresAt' => (new DateTimeImmutable())->add(new DateInterval($this->lifetime))->format(DATE_ATOM),
+                'expiresAt' => $platform->timestamp((new DateTimeImmutable())->add(new DateInterval($this->lifetime))),
             ]
         );
         return $code;
@@ -49,9 +52,12 @@ class AuthorizationCodes
     /**
      * The grant row is locked first, in the order revoking takes.
      */
-    public function spend(string $code): ?SpentAuthorizationCode
+    public function spend(#[SensitiveParameter] string $code): ?SpentAuthorizationCode
     {
         $digest = TokenSecret::digest($code);
+        if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
+            return $this->spendOnMysql($digest);
+        }
         $this->connection->executeQuery(
             'SELECT g.grant_id FROM flownative_oauth2_server_grant g
              JOIN flownative_oauth2_server_authorization_code c ON c.grant_id = g.grant_id
@@ -63,6 +69,7 @@ class AuthorizationCodes
              FROM flownative_oauth2_server_grant g
              WHERE c.code_digest = :digest AND g.grant_id = c.grant_id
                AND c.spent_at IS NULL AND c.expires_at > now() AND g.revoked_at IS NULL
+               AND (g.expires_at IS NULL OR g.expires_at > now())
              RETURNING c.grant_id, c.redirect_uri, c.code_challenge, g.client_id, g.resource, g.scopes',
             ['digest' => $digest]
         );
@@ -71,16 +78,60 @@ class AuthorizationCodes
 
     /**
      * A code that was spent before, so that a second use by its client can revoke its tokens.
+     * Ask only after spend() found nothing, in the same transaction.
      */
-    public function spentBefore(string $code): ?SpentAuthorizationCode
+    public function spentBefore(#[SensitiveParameter] string $code): ?SpentAuthorizationCode
     {
         $row = $this->connection->fetchAssociative(
             'SELECT c.grant_id, c.redirect_uri, c.code_challenge, g.client_id, g.resource, g.scopes
              FROM flownative_oauth2_server_authorization_code c
              JOIN flownative_oauth2_server_grant g ON g.grant_id = c.grant_id
-             WHERE c.code_digest = :digest AND c.spent_at IS NOT NULL',
+             WHERE c.code_digest = :digest AND c.spent_at IS NOT NULL' . $this->lockingReadOnMysql(),
             ['digest' => TokenSecret::digest($code)]
         );
         return $row === false ? null : SpentAuthorizationCode::fromRow($row);
+    }
+
+    /**
+     * InnoDB reads a transaction's snapshot, taken before spend() waited for
+     * the grant lock. A plain read after a concurrent spend would still see
+     * the code unspent, so the read that follows a spend locks the rows and
+     * sees what was committed meanwhile. The grant row is held already.
+     */
+    private function lockingReadOnMysql(): string
+    {
+        return DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL ? ' FOR UPDATE' : '';
+    }
+
+    /**
+     * MySQL has no UPDATE … RETURNING, so the code row is locked and read
+     * before it is marked spent, in a transaction of its own or nested in the
+     * caller's. A concurrent second spend waits for the lock and then finds
+     * the code spent. The grant is read without a lock first, because a
+     * locking join would take the rows in an order of the optimizer's choice.
+     */
+    private function spendOnMysql(string $digest): ?SpentAuthorizationCode
+    {
+        return $this->connection->transactional(static function (Connection $connection) use ($digest): ?SpentAuthorizationCode {
+            $grantIdentifier = $connection->fetchOne('SELECT grant_id FROM flownative_oauth2_server_authorization_code WHERE code_digest = :digest', ['digest' => $digest]);
+            if (!is_string($grantIdentifier)) {
+                return null;
+            }
+            $connection->fetchOne('SELECT grant_id FROM flownative_oauth2_server_grant WHERE grant_id = :grantId FOR UPDATE', ['grantId' => $grantIdentifier]);
+            $row = $connection->fetchAssociative(
+                'SELECT c.grant_id, c.redirect_uri, c.code_challenge, g.client_id, g.resource, g.scopes
+                 FROM flownative_oauth2_server_authorization_code c
+                 JOIN flownative_oauth2_server_grant g ON g.grant_id = c.grant_id
+                 WHERE c.code_digest = :digest AND c.spent_at IS NULL AND c.expires_at > UTC_TIMESTAMP(6) AND g.revoked_at IS NULL
+                   AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6))
+                 FOR UPDATE',
+                ['digest' => $digest]
+            );
+            if ($row === false) {
+                return null;
+            }
+            $connection->executeStatement('UPDATE flownative_oauth2_server_authorization_code SET spent_at = UTC_TIMESTAMP(6) WHERE code_digest = :digest', ['digest' => $digest]);
+            return SpentAuthorizationCode::fromRow($row);
+        });
     }
 }

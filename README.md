@@ -29,7 +29,20 @@ person sees, the consent page above all, stay with the application.
 
 - PHP 8.4 or 8.5 with the curl and mbstring extensions
 - Flow 9
-- PostgreSQL: the package brings its tables as a PostgreSQL migration
+- PostgreSQL, MySQL 8.0.17 or later, or MariaDB 10.6 or later
+
+The package brings its tables as Doctrine migrations for PostgreSQL
+(`Migrations/Postgresql`) and for MySQL and MariaDB (`Migrations/Mysql`);
+`./flow doctrine:migrate` runs the ones of the configured database.
+On MySQL and MariaDB the tables store their timestamps in UTC. MySQL
+older than 8.0.17 ignores the CHECK constraints of the tables and lacks
+`utf8mb4_0900_bin`, the binary collation without padding which makes an
+identifier match only itself.
+
+Subjects and client identifiers are limited to 768 characters on every
+database, the longest key a MySQL index takes. A longer client
+identifier is answered as an unknown client; approving a request for a
+longer subject fails with an `InvalidArgumentException`.
 
 ## Installation
 
@@ -76,13 +89,41 @@ important ones:
 | `endpoints.*` | `/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/oauth/revoke` | Paths of the endpoints below the issuer |
 | `resourcePath` | `/mcp` | The protected resource tokens are bound to, below the issuer |
 | `consentPagePath` | `/oauth/consent` | Where the default consent page sends a validated request |
-| `lifetimes.*` | `PT10M`, `PT1M`, `PT1H`, `P90D` | ISO 8601 durations of authorization requests, codes, access tokens and refresh tokens |
+| `lifetimes.*` | `PT10M`, `PT1M`, `PT1H`, `P90D`, `null` | ISO 8601 durations of authorization requests, codes, access tokens and refresh tokens, and the absolute lifetime of a grant (`lifetimes.grant`, see below) |
 | `refreshTokenRetryGracePeriod` | `3` | Seconds in which a client presenting a spent refresh token again gets `invalid_grant` without its grant being revoked |
 | `tokenPrefixes.*` | `oauth2_at_`, `oauth2_rt_` | Prefixes which let secret scanners recognize a token |
 | `scopes.*` | `mcp`, `offline_access` | Supported scopes, the default scope and the scopes of the resource |
 | `clientMetadataDocuments.*` | enabled | Size limit, timeout, cache lifetimes and the networks a document is never fetched from |
 | `registration.enabled` | `true` | Whether dynamic client registration is offered |
 | `registration.unusedClientLifetime` | `P1D` | How long a registered client without a grant is kept |
+
+### Grant lifetime
+
+A refresh token is replaced on every use and lives `lifetimes.refreshToken`
+from then on, so a client which keeps refreshing keeps its grant for ever.
+`lifetimes.grant` limits that. It is an ISO 8601 duration, for example
+`P180D`, counted from the approval of the grant:
+
+```yaml
+Flownative:
+  OAuth2:
+    Server:
+      lifetimes:
+        grant: 'P180D'
+```
+
+Once it has passed, the grant is refused like a revoked one: the token
+endpoint answers a refresh with `invalid_grant`, and the access tokens
+issued before no longer validate at the resource. The client has to send
+the person through the authorization again. A refresh token never expires
+later than its grant.
+
+The default is `null`, which sets no limit. The expiry is stored with the
+grant when it is approved, so a change of the setting applies to grants
+approved afterwards; earlier grants keep the lifetime they got. The
+migration adds the column, and existing grants have no expiry. The garbage
+collection removes the tokens of an expired grant but keeps the grant
+itself, as it does with revoked ones.
 
 The cache `Flownative_OAuth2_Server_RefusedClientMetadataDocuments`
 remembers refused metadata documents. If the application runs on more

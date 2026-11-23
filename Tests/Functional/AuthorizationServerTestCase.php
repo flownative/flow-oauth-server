@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace Flownative\OAuth2\Server\Tests\Functional;
 
+use Doctrine\DBAL\Connection;
 use Flownative\OAuth2\Server\AuthorizationRequests;
 use Flownative\OAuth2\Server\AuthorizationServerMiddleware;
 use Flownative\OAuth2\Server\ConfiguredConsentPage;
 use Flownative\OAuth2\Server\ConsentPageInterface;
+use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\ErrorRedirectPolicyInterface;
+use Flownative\OAuth2\Server\Grants;
 use Flownative\OAuth2\Server\Issuer;
 use Flownative\OAuth2\Server\IssuerResolverInterface;
 use Flownative\OAuth2\Server\RedirectErrorsOfApprovedClients;
@@ -16,11 +19,13 @@ use Flownative\OAuth2\Server\RequestHostIssuerResolver;
 use GuzzleHttp\Psr7\ServerRequest;
 use Neos\Flow\Configuration\ConfigurationManager;
 use Neos\Flow\Http\ServerRequestAttributes;
+use Neos\Flow\Persistence\Doctrine\Service as DoctrineService;
 use Neos\Flow\Tests\FunctionalTestCase;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use ReflectionProperty;
 use RuntimeException;
 
 /**
@@ -47,12 +52,17 @@ abstract class AuthorizationServerTestCase extends FunctionalTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->createTablesUnlessPresent();
         $instancesOfThePackage = [
             IssuerResolverInterface::class => new RequestHostIssuerResolver(),
             ConsentPageInterface::class => $this->objectManager->get(ConfiguredConsentPage::class),
             ErrorRedirectPolicyInterface::class => $this->objectManager->get(RedirectErrorsOfApprovedClients::class),
         ];
         foreach ($instancesOfThePackage as $objectName => $instance) {
+            // An application that keeps the package's own needs no replacement, and a prototype cannot be replaced.
+            if ($this->objectManager->getClassNameByObjectName($objectName) === $instance::class) {
+                continue;
+            }
             $this->instancesOfTheApplication[$objectName] = $this->objectManager->get($objectName);
             $this->objectManager->setInstance($objectName, $instance);
         }
@@ -60,10 +70,35 @@ abstract class AuthorizationServerTestCase extends FunctionalTestCase
 
     protected function tearDown(): void
     {
+        $this->setGrantLifetime(null);
         foreach ($this->instancesOfTheApplication as $objectName => $instance) {
             $this->objectManager->setInstance($objectName, $instance);
         }
         parent::tearDown();
+    }
+
+    /**
+     * Sets lifetimes.grant for the grants approved from now on; null is no limit.
+     */
+    protected function setGrantLifetime(?string $lifetime): void
+    {
+        (new ReflectionProperty(Grants::class, 'lifetime'))->setValue($this->objectManager->get(Grants::class), $lifetime);
+    }
+
+    protected function databasePlatform(): DatabasePlatform
+    {
+        return DatabasePlatform::of($this->objectManager->get(Connection::class));
+    }
+
+    /**
+     * SQL for a time the given seconds before the expression, for tests that move rows into the past.
+     */
+    protected function secondsBefore(string $expression, int $seconds): string
+    {
+        return match ($this->databasePlatform()) {
+            DatabasePlatform::POSTGRESQL => sprintf("%s - interval '%d seconds'", $expression, $seconds),
+            DatabasePlatform::MYSQL => sprintf('%s - INTERVAL %d SECOND', $expression, $seconds),
+        };
     }
 
     /**
@@ -203,5 +238,25 @@ abstract class AuthorizationServerTestCase extends FunctionalTestCase
     protected static function codeChallengeOf(string $codeVerifier): string
     {
         return rtrim(strtr(base64_encode(hash('sha256', $codeVerifier, true)), '+/', '-_'), '=');
+    }
+
+    /**
+     * An application may build the schema for its tests once and keep it.
+     * Flow's own persistence manager drops every table after each test, so
+     * then the package's migrations create them again.
+     */
+    private function createTablesUnlessPresent(): void
+    {
+        $connection = $this->objectManager->get(Connection::class);
+        if ($connection->createSchemaManager()->tablesExist(['flownative_oauth2_server_grant'])) {
+            return;
+        }
+        $versions = match (DatabasePlatform::of($connection)) {
+            DatabasePlatform::POSTGRESQL => ['Version20261119101252', 'Version20261121090000'],
+            DatabasePlatform::MYSQL => ['Version20261120190207', 'Version20261120201811', 'Version20261120203500', 'Version20261121090100'],
+        };
+        foreach ($versions as $version) {
+            $this->objectManager->get(DoctrineService::class)->executeMigration('Neos\\Flow\\Persistence\\Doctrine\\Migrations\\' . $version);
+        }
     }
 }

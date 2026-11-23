@@ -157,12 +157,12 @@ class ClientMetadataDocumentTest extends AuthorizationServerTestCase
         self::assertSame(302, $this->authorize(self::GOOD_CLIENT_ID)->getStatusCode());
         $this->documentAnswers = false;
         $connection = $this->objectManager->get(Connection::class);
-        $connection->executeStatement("UPDATE flownative_oauth2_server_client SET expires_at = now() - interval '1 hour' WHERE client_id = :clientId", ['clientId' => self::GOOD_CLIENT_ID]);
+        $connection->executeStatement('UPDATE flownative_oauth2_server_client SET expires_at = ' . $this->secondsBefore($this->databasePlatform()->now(), 3600) . ' WHERE client_id = :clientId', ['clientId' => self::GOOD_CLIENT_ID]);
 
         self::assertSame(302, $this->authorize(self::GOOD_CLIENT_ID)->getStatusCode(), 'a failing fetch keeps the client it served');
         self::assertCount(2, $this->fetches, 'the expired document is asked again');
 
-        $connection->executeStatement("UPDATE flownative_oauth2_server_client SET expires_at = now() - interval '25 hours' WHERE client_id = :clientId", ['clientId' => self::GOOD_CLIENT_ID]);
+        $connection->executeStatement('UPDATE flownative_oauth2_server_client SET expires_at = ' . $this->secondsBefore($this->databasePlatform()->now(), 25 * 3600) . ' WHERE client_id = :clientId', ['clientId' => self::GOOD_CLIENT_ID]);
         self::assertSame(400, $this->authorize(self::GOOD_CLIENT_ID)->getStatusCode());
     }
 }

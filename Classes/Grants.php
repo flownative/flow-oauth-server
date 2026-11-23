@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace Flownative\OAuth2\Server;
 
+use DateInterval;
+use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
+use InvalidArgumentException;
 use Neos\Flow\Annotations as Flow;
 use Neos\Flow\Utility\Algorithms;
+use SensitiveParameter;
 
 /**
  * A grant is what a subject approved for one client; every code and token is
@@ -16,6 +20,15 @@ use Neos\Flow\Utility\Algorithms;
 #[Flow\Scope('singleton')]
 class Grants
 {
+    /**
+     * The longest subject the tables take: MySQL indexes at most 768
+     * characters. A longer one is refused on every database.
+     */
+    public const int MAXIMUM_SUBJECT_LENGTH = 768;
+
+    #[Flow\InjectConfiguration(path: 'lifetimes.grant')]
+    protected ?string $lifetime = null;
+
     public function __construct(
         private readonly Connection $connection,
     ) {
@@ -26,11 +39,15 @@ class Grants
      */
     public function create(PendingAuthorizationRequest $request, string $subject): string
     {
+        if (mb_strlen($subject) > self::MAXIMUM_SUBJECT_LENGTH) {
+            throw new InvalidArgumentException(sprintf('A subject may be at most %d characters long', self::MAXIMUM_SUBJECT_LENGTH), 1795206411);
+        }
         $grantIdentifier = Algorithms::generateUUID();
         assert($grantIdentifier !== '');
+        $platform = DatabasePlatform::of($this->connection);
         $this->connection->executeStatement(
-            'INSERT INTO flownative_oauth2_server_grant (grant_id, subject, client_id, client_name, redirect_uri, issuer, resource, scopes, created_at)
-             VALUES (:grantId, :subject, :clientId, :clientName, :redirectUri, :issuer, :resource, :scopes, now())',
+            "INSERT INTO flownative_oauth2_server_grant (grant_id, subject, client_id, client_name, redirect_uri, issuer, resource, scopes, created_at, expires_at)
+             VALUES (:grantId, :subject, :clientId, :clientName, :redirectUri, :issuer, :resource, :scopes, {$platform->now()}, :expiresAt)",
             [
                 'grantId' => $grantIdentifier,
                 'subject' => $subject,
@@ -40,6 +57,7 @@ class Grants
                 'issuer' => $request->issuer->value,
                 'resource' => $request->resource,
                 'scopes' => json_encode($request->scopes, JSON_THROW_ON_ERROR),
+                'expiresAt' => $this->lifetime === null ? null : $platform->timestamp((new DateTimeImmutable())->add(new DateInterval($this->lifetime))),
             ]
         );
         return $grantIdentifier;
@@ -54,16 +72,14 @@ class Grants
             return false;
         }
         $subject = $this->connection->transactional(function (Connection $connection) use ($grantIdentifier): ?string {
-            $subject = $connection->fetchOne(
-                'UPDATE flownative_oauth2_server_grant SET revoked_at = now() WHERE grant_id = :grantId AND revoked_at IS NULL RETURNING subject',
-                ['grantId' => $grantIdentifier]
-            );
-            if (!is_string($subject)) {
+            $subject = self::markRevoked($connection, $grantIdentifier);
+            if ($subject === null) {
                 return null;
             }
-            $connection->executeStatement('UPDATE flownative_oauth2_server_access_token SET revoked_at = now() WHERE grant_id = :grantId AND revoked_at IS NULL', ['grantId' => $grantIdentifier]);
-            $connection->executeStatement('UPDATE flownative_oauth2_server_refresh_token SET revoked_at = now() WHERE grant_id = :grantId AND revoked_at IS NULL', ['grantId' => $grantIdentifier]);
-            $connection->executeStatement('UPDATE flownative_oauth2_server_authorization_code SET spent_at = now() WHERE grant_id = :grantId AND spent_at IS NULL', ['grantId' => $grantIdentifier]);
+            $now = DatabasePlatform::of($connection)->now();
+            $connection->executeStatement("UPDATE flownative_oauth2_server_access_token SET revoked_at = {$now} WHERE grant_id = :grantId AND revoked_at IS NULL", ['grantId' => $grantIdentifier]);
+            $connection->executeStatement("UPDATE flownative_oauth2_server_refresh_token SET revoked_at = {$now} WHERE grant_id = :grantId AND revoked_at IS NULL", ['grantId' => $grantIdentifier]);
+            $connection->executeStatement("UPDATE flownative_oauth2_server_authorization_code SET spent_at = {$now} WHERE grant_id = :grantId AND spent_at IS NULL", ['grantId' => $grantIdentifier]);
             $this->emitGrantRevoked($grantIdentifier, $subject);
             return $subject;
         });
@@ -73,7 +89,7 @@ class Grants
     /**
      * Revokes the grant behind an access or refresh token if the token was issued to the client (RFC 7009).
      */
-    public function revokeByToken(string $token, string $clientIdentifier): bool
+    public function revokeByToken(#[SensitiveParameter] string $token, string $clientIdentifier): bool
     {
         $grantIdentifier = $this->connection->fetchOne(
             'SELECT g.grant_id FROM flownative_oauth2_server_grant g
@@ -107,8 +123,9 @@ class Grants
 
     public function touch(string $grantIdentifier): void
     {
+        $now = DatabasePlatform::of($this->connection)->now();
         $this->connection->executeStatement(
-            'UPDATE flownative_oauth2_server_grant SET last_used_at = now() WHERE grant_id = :grantId',
+            "UPDATE flownative_oauth2_server_grant SET last_used_at = {$now} WHERE grant_id = :grantId",
             ['grantId' => $grantIdentifier]
         );
     }
@@ -124,5 +141,30 @@ class Grants
     #[Flow\Signal]
     protected function emitGrantRevoked(string $grantIdentifier, string $subject): void
     {
+    }
+
+    /**
+     * Marks the grant revoked and returns its subject, or null if it was
+     * revoked already or never existed. On MySQL the row lock decides: a
+     * concurrent revocation waits for it and then finds the grant revoked.
+     */
+    private static function markRevoked(Connection $connection, string $grantIdentifier): ?string
+    {
+        if (DatabasePlatform::of($connection) === DatabasePlatform::POSTGRESQL) {
+            $subject = $connection->fetchOne(
+                'UPDATE flownative_oauth2_server_grant SET revoked_at = now() WHERE grant_id = :grantId AND revoked_at IS NULL RETURNING subject',
+                ['grantId' => $grantIdentifier]
+            );
+            return is_string($subject) ? $subject : null;
+        }
+        $subject = $connection->fetchOne(
+            'SELECT subject FROM flownative_oauth2_server_grant WHERE grant_id = :grantId AND revoked_at IS NULL FOR UPDATE',
+            ['grantId' => $grantIdentifier]
+        );
+        if (!is_string($subject)) {
+            return null;
+        }
+        $connection->executeStatement('UPDATE flownative_oauth2_server_grant SET revoked_at = UTC_TIMESTAMP(6) WHERE grant_id = :grantId', ['grantId' => $grantIdentifier]);
+        return $subject;
     }
 }

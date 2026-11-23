@@ -22,11 +22,16 @@ Flownative:
 
       # ISO 8601 durations. A refresh token is replaced on every use, so its
       # lifetime is how long a client may stay away.
+      #
+      # The grant lifetime is how long a grant lives at most, counted from the
+      # approval and whatever the client does. null lets a grant live as long
+      # as it is used. A change applies to grants approved afterwards.
       lifetimes:
         authorizationRequest: 'PT10M'
         authorizationCode: 'PT1M'
         accessToken: 'PT1H'
         refreshToken: 'P90D'
+        grant: null
 
       # Seconds after a refresh in which its client presenting the spent refresh
       # token again, as after a lost answer, gets invalid_grant without the

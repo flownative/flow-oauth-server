@@ -5,15 +5,18 @@ declare(strict_types=1);
 namespace Flownative\OAuth2\Server\League;
 
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
+use Flownative\OAuth2\Server\DatabasePlatform;
 use Flownative\OAuth2\Server\TokenSecret;
 use League\OAuth2\Server\Entities\RefreshTokenEntityInterface;
 use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
 use LogicException;
 use Neos\Flow\Annotations as Flow;
 use RuntimeException;
+use SensitiveParameter;
 
 /**
- * Refresh tokens by digest, each spent once by a conditional UPDATE.
+ * Refresh tokens by digest, each spent once under a lock of its grant.
  */
 #[Flow\Scope('singleton')]
 class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
@@ -37,16 +40,18 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
         if (!$refreshTokenEntity instanceof RefreshToken || !$accessToken instanceof AccessToken) {
             throw new LogicException('Only opaque refresh tokens are persisted', 1795083644);
         }
+        $platform = DatabasePlatform::of($this->connection);
         $inserted = $this->connection->executeStatement(
-            'INSERT INTO flownative_oauth2_server_refresh_token (token_digest, grant_id, access_token_digest, created_at, expires_at)
-             SELECT :digest, g.grant_id, :accessTokenDigest, now(), :expiresAt
+            "INSERT INTO flownative_oauth2_server_refresh_token (token_digest, grant_id, access_token_digest, created_at, expires_at)
+             SELECT :digest, g.grant_id, :accessTokenDigest, {$platform->now()},
+                    CASE WHEN g.expires_at IS NOT NULL AND g.expires_at < :expiresAt THEN g.expires_at ELSE :expiresAt END
              FROM flownative_oauth2_server_grant g
-             WHERE g.grant_id = :grantId AND g.revoked_at IS NULL',
+             WHERE g.grant_id = :grantId AND g.revoked_at IS NULL",
             [
                 'digest' => $refreshTokenEntity->digest(),
                 'grantId' => $accessToken->getUserIdentifier(),
                 'accessTokenDigest' => $accessToken->digest(),
-                'expiresAt' => $refreshTokenEntity->getExpiryDateTime()->format(DATE_ATOM),
+                'expiresAt' => $platform->timestamp($refreshTokenEntity->getExpiryDateTime()),
             ]
         );
         if ($inserted !== 1) {
@@ -54,20 +59,22 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
         }
     }
 
-    public function revokeRefreshToken(string $tokenId): void
+    public function revokeRefreshToken(#[SensitiveParameter] string $tokenId): void
     {
+        $now = DatabasePlatform::of($this->connection)->now();
         $this->connection->executeStatement(
-            'UPDATE flownative_oauth2_server_refresh_token SET revoked_at = now() WHERE token_digest = :digest AND revoked_at IS NULL',
+            "UPDATE flownative_oauth2_server_refresh_token SET revoked_at = {$now} WHERE token_digest = :digest AND revoked_at IS NULL",
             ['digest' => TokenSecret::digest($this->prefix . $tokenId)]
         );
     }
 
-    public function isRefreshTokenRevoked(string $tokenId): bool
+    public function isRefreshTokenRevoked(#[SensitiveParameter] string $tokenId): bool
     {
         return $this->connection->fetchOne(
             'SELECT 1 FROM flownative_oauth2_server_refresh_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
-             WHERE t.token_digest = :digest AND t.spent_at IS NULL AND t.revoked_at IS NULL AND g.revoked_at IS NULL',
+             WHERE t.token_digest = :digest AND t.spent_at IS NULL AND t.revoked_at IS NULL AND g.revoked_at IS NULL
+               AND (g.expires_at IS NULL OR g.expires_at > now())',
             ['digest' => TokenSecret::digest($this->prefix . $tokenId)]
         ) === false;
     }
@@ -77,9 +84,12 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
      * under, or null; a concurrent second spend waits for the row and finds it
      * spent. The grant row is locked first, in the order revoking takes.
      */
-    public function spend(string $secret): ?SpentRefreshToken
+    public function spend(#[SensitiveParameter] string $secret): ?SpentRefreshToken
     {
         $digest = TokenSecret::digest($secret);
+        if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
+            return $this->spendOnMysql($digest);
+        }
         $this->connection->executeQuery(
             'SELECT g.grant_id FROM flownative_oauth2_server_grant g
              JOIN flownative_oauth2_server_refresh_token t ON t.grant_id = g.grant_id
@@ -91,6 +101,7 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
              FROM flownative_oauth2_server_grant g
              WHERE t.token_digest = :digest AND g.grant_id = t.grant_id
                AND t.spent_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > now() AND g.revoked_at IS NULL
+               AND (g.expires_at IS NULL OR g.expires_at > now())
              RETURNING t.grant_id, t.access_token_digest, g.client_id, g.resource, g.scopes',
             ['digest' => $digest]
         );
@@ -99,25 +110,77 @@ class DbalRefreshTokenRepository implements RefreshTokenRepositoryInterface
 
     /**
      * A token that was spent before: presented again, it is the sign of a stolen one.
+     * Ask only after spend() found nothing, in the same transaction.
      */
-    public function spentBefore(string $secret): ?SpentRefreshToken
+    public function spentBefore(#[SensitiveParameter] string $secret): ?SpentRefreshToken
     {
         $row = $this->connection->fetchAssociative(
             'SELECT t.grant_id, t.access_token_digest, g.client_id, g.resource, g.scopes
              FROM flownative_oauth2_server_refresh_token t
              JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
-             WHERE t.token_digest = :digest AND t.spent_at IS NOT NULL',
+             WHERE t.token_digest = :digest AND t.spent_at IS NOT NULL' . $this->lockingReadOnMysql(),
             ['digest' => TokenSecret::digest($secret)]
         );
         return $row === false ? null : SpentRefreshToken::fromRow($row);
     }
 
-    public function wasSpentWithin(string $secret, int $seconds): bool
+    public function wasSpentWithin(#[SensitiveParameter] string $secret, int $seconds): bool
     {
+        if (DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL) {
+            return $this->connection->fetchOne(
+                'SELECT 1 FROM flownative_oauth2_server_refresh_token
+                 WHERE token_digest = :digest AND spent_at > UTC_TIMESTAMP(6) - INTERVAL :seconds SECOND' . $this->lockingReadOnMysql(),
+                ['digest' => TokenSecret::digest($secret), 'seconds' => $seconds],
+                ['seconds' => ParameterType::INTEGER]
+            ) !== false;
+        }
         return $this->connection->fetchOne(
             'SELECT 1 FROM flownative_oauth2_server_refresh_token
              WHERE token_digest = :digest AND spent_at > now() - make_interval(secs => :seconds)',
             ['digest' => TokenSecret::digest($secret), 'seconds' => $seconds]
         ) !== false;
+    }
+
+    /**
+     * InnoDB reads a transaction's snapshot, taken before spend() waited for
+     * the grant lock. A plain read after a concurrent spend would still see
+     * the token unspent, so the reads that follow a spend lock the rows and
+     * see what was committed meanwhile. The grant row is held already.
+     */
+    private function lockingReadOnMysql(): string
+    {
+        return DatabasePlatform::of($this->connection) === DatabasePlatform::MYSQL ? ' FOR UPDATE' : '';
+    }
+
+    /**
+     * MySQL has no UPDATE … RETURNING, so the token row is locked and read
+     * before it is marked spent, in a transaction of its own or nested in the
+     * caller's. A concurrent second spend waits for the lock and then finds
+     * the token spent. The grant is read without a lock first, because a
+     * locking join would take the rows in an order of the optimizer's choice.
+     */
+    private function spendOnMysql(string $digest): ?SpentRefreshToken
+    {
+        return $this->connection->transactional(static function (Connection $connection) use ($digest): ?SpentRefreshToken {
+            $grantIdentifier = $connection->fetchOne('SELECT grant_id FROM flownative_oauth2_server_refresh_token WHERE token_digest = :digest', ['digest' => $digest]);
+            if (!is_string($grantIdentifier)) {
+                return null;
+            }
+            $connection->fetchOne('SELECT grant_id FROM flownative_oauth2_server_grant WHERE grant_id = :grantId FOR UPDATE', ['grantId' => $grantIdentifier]);
+            $row = $connection->fetchAssociative(
+                'SELECT t.grant_id, t.access_token_digest, g.client_id, g.resource, g.scopes
+                 FROM flownative_oauth2_server_refresh_token t
+                 JOIN flownative_oauth2_server_grant g ON g.grant_id = t.grant_id
+                 WHERE t.token_digest = :digest AND t.spent_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > UTC_TIMESTAMP(6) AND g.revoked_at IS NULL
+                   AND (g.expires_at IS NULL OR g.expires_at > UTC_TIMESTAMP(6))
+                 FOR UPDATE',
+                ['digest' => $digest]
+            );
+            if ($row === false) {
+                return null;
+            }
+            $connection->executeStatement('UPDATE flownative_oauth2_server_refresh_token SET spent_at = UTC_TIMESTAMP(6) WHERE token_digest = :digest', ['digest' => $digest]);
+            return SpentRefreshToken::fromRow($row);
+        });
     }
 }

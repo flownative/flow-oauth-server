@@ -259,14 +259,14 @@ class AuthorizationCodeFlowTest extends AuthorizationServerTestCase
         $tokens = self::json($this->exchange($clientIdentifier, $this->codeFor($clientIdentifier)));
         self::assertIsString($tokens['access_token']);
 
-        $this->objectManager->get(Connection::class)->executeStatement("UPDATE flownative_oauth2_server_access_token SET expires_at = now() - interval '1 second'");
+        $this->objectManager->get(Connection::class)->executeStatement('UPDATE flownative_oauth2_server_access_token SET expires_at = ' . $this->secondsBefore($this->databasePlatform()->now(), 1));
 
         self::assertNull($this->objectManager->get(AccessTokenValidator::class)->validate($tokens['access_token'], $this->issuer()));
     }
 
     private function backdateSpentRefreshTokens(): void
     {
-        $this->objectManager->get(Connection::class)->executeStatement("UPDATE flownative_oauth2_server_refresh_token SET spent_at = spent_at - interval '1 minute' WHERE spent_at IS NOT NULL");
+        $this->objectManager->get(Connection::class)->executeStatement('UPDATE flownative_oauth2_server_refresh_token SET spent_at = ' . $this->secondsBefore('spent_at', 60) . ' WHERE spent_at IS NOT NULL');
     }
 
     /**
